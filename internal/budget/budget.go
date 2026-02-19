@@ -178,7 +178,6 @@ func (b *Builder) EnforceGlobalBudget(
 		if runeCount(r2) <= b.Limits.MaxChars {
 			return plan2, r2, nil
 		}
-		rendered = r2
 	}
 
 	// Tighten per-file truncation (halve max lines) once and retry.
@@ -298,7 +297,7 @@ func readAndTruncateFile(rel, abs string, slices []string, primary string, prior
 	if err != nil {
 		return FileEntry{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var kept bytes.Buffer
 	reader := bufio.NewReaderSize(f, 64*1024)

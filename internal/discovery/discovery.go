@@ -245,7 +245,7 @@ func sniffBinary(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const n = 8 * 1024
 	buf := make([]byte, n)

@@ -224,7 +224,7 @@ func renderManifestIncluded(files []budget.FileEntry, opt ManifestOptions, fb Fi
 		for _, f := range files {
 			if f.PrimarySlice != currentSlice {
 				currentSlice = f.PrimarySlice
-				fmt.Fprintf(tw, "\n[%s]\n", currentSlice)
+				_, _ = fmt.Fprintf(tw, "\n[%s]\n", currentSlice)
 			}
 			writeManifestLine(tw, idx, f, opt)
 			idx++
@@ -256,7 +256,7 @@ func writeManifestLine(w *tabwriter.Writer, idx int, f budget.FileEntry, opt Man
 	if opt.IncludeTruncationNotes {
 		parts = append(parts, fmt.Sprintf("truncated=%t", f.Truncated))
 	}
-	fmt.Fprintf(w, "%3d\t%s\t%s\n", idx, f.RelPath, strings.Join(parts, " "))
+	_, _ = fmt.Fprintf(w, "%3d\t%s\t%s\n", idx, f.RelPath, strings.Join(parts, " "))
 }
 
 func renderManifestDropped(dropped []budget.DroppedEntry, droppedSlices []string, nl string) string {

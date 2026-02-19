@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/mmrzaf/snip/internal/selector"
 )
 
+// DoctorOptions configures snip doctor.
 type DoctorOptions struct {
 	ConfigPath    string
 	RootOverride  string
@@ -27,12 +27,8 @@ type DoctorOptions struct {
 	Now           func() time.Time
 }
 
+// Doctor returns effective configuration and environment diagnostics.
 func Doctor(ctx context.Context, opts DoctorOptions) (string, error) {
-	log := opts.Logger
-	if log == nil {
-		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	}
-
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
 		return "", Wrap(ExitUsage, err)
@@ -135,6 +131,7 @@ func Doctor(ctx context.Context, opts DoctorOptions) (string, error) {
 	return b.String(), nil
 }
 
+// ExplainOptions configures snip explain.
 type ExplainOptions struct {
 	ConfigPath    string
 	RootOverride  string
@@ -146,12 +143,8 @@ type ExplainOptions struct {
 	Now           func() time.Time
 }
 
+// Explain returns inclusion/exclusion details for a single path.
 func Explain(ctx context.Context, opts ExplainOptions) (string, error) {
-	log := opts.Logger
-	if log == nil {
-		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	}
-
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
 		return "", Wrap(ExitUsage, err)
