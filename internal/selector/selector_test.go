@@ -48,6 +48,7 @@ func TestEnabledSlices(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
+	cfg.DefaultProfile = "p"
 	cfg.Slices = map[string]config.SliceConfig{
 		"api":   {Include: []string{"**/*.go"}, Priority: 100},
 		"tests": {Include: []string{"**/*_test.go"}, Priority: 10},
@@ -84,6 +85,7 @@ func TestSelectPrimaryAndHiddenRules(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
+	cfg.DefaultProfile = "p"
 	cfg.Slices = map[string]config.SliceConfig{
 		"all": {Include: []string{"**/*"}, Priority: 1},
 		"dot": {Include: []string{".github/**"}, Priority: 10},
