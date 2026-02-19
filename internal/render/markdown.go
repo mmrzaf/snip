@@ -208,10 +208,10 @@ func renderManifestIncluded(files []budget.FileEntry, opt ManifestOptions, fb Fi
 	// Self-describe delimiters for downstream parsers.
 	if fb.Header != "" || fb.Footer != "" {
 		if fb.Header != "" {
-			buf.WriteString(fmt.Sprintf("delimiter_header: %q\n", fb.Header))
+			_, _ = fmt.Fprintf(&buf, "delimiter_header: %q\n", fb.Header)
 		}
 		if fb.Footer != "" {
-			buf.WriteString(fmt.Sprintf("delimiter_footer: %q\n", fb.Footer))
+			_, _ = fmt.Fprintf(&buf, "delimiter_footer: %q\n", fb.Footer)
 		}
 		buf.WriteString("\n")
 	}
@@ -265,7 +265,7 @@ func renderManifestDropped(dropped []budget.DroppedEntry, droppedSlices []string
 		slices := append([]string(nil), droppedSlices...)
 		sort.Strings(slices)
 		for _, s := range slices {
-			buf.WriteString(fmt.Sprintf("- slice=%s reason=budget_exceeded", s))
+			_, _ = fmt.Fprintf(&buf, "- slice=%s reason=budget_exceeded", s)
 			buf.WriteString("\n")
 		}
 	}

@@ -18,7 +18,7 @@ Here’s a clean, execution-focused rewrite. Use this verbatim:
 ### Go (recommended)
 
 ```bash
-go install github.com/you/snip/cmd/snip@latest
+go install github.com/mmrzaf/snip/cmd/snip@latest
 ```
 
 ### Prebuilt binaries
