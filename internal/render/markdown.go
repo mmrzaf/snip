@@ -36,9 +36,17 @@ type Renderer struct {
 	CodeFences      bool
 	IncludeTree     bool
 	TreeDepth       int
+	TreePaths       []string
+	SlicePatterns   map[string]SlicePatterns
 	IncludeManifest bool
 	Manifest        ManifestOptions
 	FileBlock       FileBlockOptions
+}
+
+// SlicePatterns describes slice include/exclude patterns for diagnostics.
+type SlicePatterns struct {
+	Include []string
+	Exclude []string
 }
 
 // ManifestOptions controls manifest rendering.
@@ -73,12 +81,18 @@ func (r Renderer) RenderMarkdown(info BundleInfo, plan budget.Plan) (string, err
 	write(fmt.Sprintf("snip_version: %s", info.SnipVersion))
 
 	if r.IncludeTree {
+		treePaths := append([]string(nil), r.TreePaths...)
+		if len(treePaths) == 0 {
+			for _, f := range files {
+				treePaths = append(treePaths, f.RelPath)
+			}
+		}
 		write("")
 		write("## Tree")
 		write("")
 		buf.WriteString("```")
 		buf.WriteString(nl)
-		for _, line := range buildTree(files, r.TreeDepth) {
+		for _, line := range buildTree(treePaths, r.TreeDepth) {
 			buf.WriteString(line)
 			buf.WriteString(nl)
 		}
@@ -94,7 +108,7 @@ func (r Renderer) RenderMarkdown(info BundleInfo, plan budget.Plan) (string, err
 		write("")
 		write("## Manifest (dropped)")
 		write("")
-		buf.WriteString(renderManifestDropped(plan.Dropped, plan.DroppedSlices, nl))
+		buf.WriteString(renderManifestDropped(plan.Dropped, plan.DroppedSlices, files, info.Enabled, r.SlicePatterns, nl))
 	}
 
 	// Content.
@@ -259,16 +273,72 @@ func writeManifestLine(w *tabwriter.Writer, idx int, f budget.FileEntry, opt Man
 	_, _ = fmt.Fprintf(w, "%3d\t%s\t%s\n", idx, f.RelPath, strings.Join(parts, " "))
 }
 
-func renderManifestDropped(dropped []budget.DroppedEntry, droppedSlices []string, nl string) string {
+func renderManifestDropped(
+	dropped []budget.DroppedEntry,
+	droppedSlices []string,
+	included []budget.FileEntry,
+	enabledSlices []string,
+	slicePatterns map[string]SlicePatterns,
+	nl string,
+) string {
 	var buf bytes.Buffer
+	used := map[string]bool{}
+	for _, f := range included {
+		for _, s := range f.Slices {
+			used[s] = true
+		}
+	}
+
+	droppedSet := map[string]bool{}
 	if len(droppedSlices) > 0 {
 		slices := append([]string(nil), droppedSlices...)
 		sort.Strings(slices)
 		for _, s := range slices {
+			droppedSet[s] = true
 			_, _ = fmt.Fprintf(&buf, "- slice=%s reason=budget_exceeded", s)
+			if p, ok := slicePatterns[s]; ok {
+				_, _ = fmt.Fprintf(&buf, " include=%s exclude=%s", formatPatterns(p.Include), formatPatterns(p.Exclude))
+			}
 			buf.WriteString("\n")
 		}
 	}
+
+	var unused []string
+	enabledSet := map[string]bool{}
+	for _, s := range enabledSlices {
+		enabledSet[s] = true
+	}
+	for _, s := range enabledSlices {
+		if used[s] || droppedSet[s] {
+			continue
+		}
+		unused = append(unused, s)
+	}
+	sort.Strings(unused)
+	for _, s := range unused {
+		_, _ = fmt.Fprintf(&buf, "- slice=%s reason=unused", s)
+		if p, ok := slicePatterns[s]; ok {
+			_, _ = fmt.Fprintf(&buf, " include=%s exclude=%s", formatPatterns(p.Include), formatPatterns(p.Exclude))
+		}
+		buf.WriteString("\n")
+	}
+
+	var notEnabled []string
+	for s := range slicePatterns {
+		if enabledSet[s] {
+			continue
+		}
+		notEnabled = append(notEnabled, s)
+	}
+	sort.Strings(notEnabled)
+	for _, s := range notEnabled {
+		_, _ = fmt.Fprintf(&buf, "- slice=%s reason=not_enabled", s)
+		if p, ok := slicePatterns[s]; ok {
+			_, _ = fmt.Fprintf(&buf, " include=%s exclude=%s", formatPatterns(p.Include), formatPatterns(p.Exclude))
+		}
+		buf.WriteString("\n")
+	}
+
 	for _, d := range dropped {
 		note := fmt.Sprintf("- %s reason=%s", d.RelPath, d.Reason)
 		if d.Detail != "" {
@@ -287,19 +357,22 @@ func renderManifestDropped(dropped []budget.DroppedEntry, droppedSlices []string
 	return out
 }
 
+func formatPatterns(in []string) string {
+	if len(in) == 0 {
+		return "[]"
+	}
+	return "[" + strings.Join(in, ",") + "]"
+}
+
 func sanitizeDetail(s string) string {
 	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	return s
 }
 
-func buildTree(files []budget.FileEntry, depth int) []string {
+func buildTree(paths []string, depth int) []string {
 	if depth <= 0 {
 		depth = 1
-	}
-	paths := make([]string, 0, len(files))
-	for _, f := range files {
-		paths = append(paths, f.RelPath)
 	}
 	sort.Strings(paths)
 
