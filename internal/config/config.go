@@ -298,10 +298,10 @@ func Validate(cfg Config) error {
 		return fmt.Errorf("render.file_block.footer must not contain newlines")
 	}
 
-	if cfg.Slices == nil || len(cfg.Slices) == 0 {
+	if len(cfg.Slices) == 0 {
 		return fmt.Errorf("at least one slice is required")
 	}
-	if cfg.Profiles == nil || len(cfg.Profiles) == 0 {
+	if len(cfg.Profiles) == 0 {
 		return fmt.Errorf("at least one profile is required")
 	}
 

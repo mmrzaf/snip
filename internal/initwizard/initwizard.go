@@ -408,11 +408,6 @@ func generateProfiles(slices map[string]config.SliceConfig, counts map[string]in
 		},
 	}
 
-	// If intent is unknown, keep api.
-	if _, ok := profiles[intent]; !ok {
-		// no-op
-	}
-
 	return profiles
 }
 
@@ -593,7 +588,7 @@ func printSliceCounts(w *os.File, cfg config.Config, counts map[string]int) {
 		if r.enabled {
 			mark = "x"
 		}
-		fmt.Fprintf(w, "  [%s] %-12s  files=%-5d  include=%v\n", mark, r.name, r.count, r.includes)
+		_, _ = fmt.Fprintf(w, "  [%s] %-12s  files=%-5d  include=%v\n", mark, r.name, r.count, r.includes)
 	}
 }
 

@@ -212,7 +212,7 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 
 func warnPartial(w *os.File, plan budget.Plan) {
 	warn := func(msg string) {
-		fmt.Fprintln(w, "warning:", msg)
+		_, _ = fmt.Fprintln(w, "warning:", msg)
 	}
 	for _, s := range plan.DroppedSlices {
 		warn(fmt.Sprintf("slice dropped due to budget: %s", s))

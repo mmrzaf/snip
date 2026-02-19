@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -138,7 +137,9 @@ func newInitCmd(rootOverride *string) *cobra.Command {
 			if err != nil {
 				return app.Wrap(app.ExitIO, err)
 			}
-			fmt.Fprintln(os.Stdout, path)
+			if _, err := fmt.Fprintln(os.Stdout, path); err != nil {
+				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+			}
 			return nil
 		},
 	}
@@ -192,7 +193,9 @@ snip run api -docs --max-chars 200000
 				Logger:        loggerFn(*verbose),
 			})
 			if !quiet && res.OutputPath != "" && res.OutputPath != "-" {
-				fmt.Fprintln(os.Stdout, res.OutputPath)
+				if _, err := fmt.Fprintln(os.Stdout, res.OutputPath); err != nil {
+					return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+				}
 			}
 			return err
 		},
@@ -237,7 +240,9 @@ snip ls debug -docs
 				Logger:        loggerFn(*verbose),
 			})
 			if out != "" {
-				fmt.Fprint(os.Stdout, out)
+				if _, err := fmt.Fprint(os.Stdout, out); err != nil {
+					return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+				}
 			}
 			return err
 		},
@@ -272,7 +277,9 @@ snip doctor --profile debug -docs
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(os.Stdout, out)
+			if _, err := fmt.Fprint(os.Stdout, out); err != nil {
+				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+			}
 			return nil
 		},
 	}
@@ -310,7 +317,9 @@ snip explain internal/app/snip.go +tests
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(os.Stdout, out)
+			if _, err := fmt.Fprint(os.Stdout, out); err != nil {
+				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+			}
 			return nil
 		},
 	}
@@ -324,18 +333,11 @@ func newVersionCmd() *cobra.Command {
 		Use:     "version",
 		Short:   "Print version",
 		Example: "snip version\n",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintln(os.Stdout, app.Version)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := fmt.Fprintln(os.Stdout, app.Version); err != nil {
+				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+			}
+			return nil
 		},
 	}
-}
-
-// small utility for stable output ordering
-func sortedKeys(m map[string]int) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

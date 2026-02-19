@@ -139,7 +139,7 @@ func FeedUTF8(buf []byte) (bool, []byte) {
 		r, size := utf8.DecodeRune(buf)
 		if r == utf8.RuneError && size == 1 {
 			// Could be invalid or incomplete. If incomplete, keep tail.
-			if len(buf) < utf8.UTFMax && utf8.FullRune(buf) == false {
+			if len(buf) < utf8.UTFMax && !utf8.FullRune(buf) {
 				return true, buf
 			}
 			return false, nil
