@@ -137,7 +137,7 @@ func defaultChoices(absRoot string) initChoices {
 		WriteLatest:     true,
 		TreeDepth:       4,
 		MaxChars:        120000,
-		DelimiterHeader: "",
+		DelimiterHeader: "<<<FILE:{path}>>>",
 		DelimiterFooter: "",
 	}
 }
