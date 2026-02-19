@@ -135,7 +135,9 @@ func Default() Config {
 				IncludeTruncationNotes: true,
 				IncludeUnreadableNotes: true,
 			},
-			FileBlock: FileBlockConfig{},
+			FileBlock: FileBlockConfig{
+				Header: "<<<FILE:{path}>>>",
+			},
 		},
 		Budgets: BudgetConfig{
 			MaxChars:        120000,

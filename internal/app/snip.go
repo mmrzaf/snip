@@ -134,6 +134,8 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 		CodeFences:      renderCfg.CodeFences,
 		IncludeTree:     renderCfg.IncludeTree,
 		TreeDepth:       renderCfg.TreeDepth,
+		TreePaths:       treePathsFromDiscovery(discovered),
+		SlicePatterns:   slicePatternsFromConfig(cfg),
 		IncludeManifest: renderCfg.IncludeManifest,
 		Manifest: render.ManifestOptions{
 			GroupBySlice:           renderCfg.Manifest.GroupBySlice,
@@ -316,6 +318,8 @@ func List(ctx context.Context, opts ListOptions) (string, bool, error) {
 		CodeFences:      cfg.Render.CodeFences,
 		IncludeTree:     cfg.Render.IncludeTree,
 		TreeDepth:       cfg.Render.TreeDepth,
+		TreePaths:       treePathsFromDiscovery(discovered),
+		SlicePatterns:   slicePatternsFromConfig(cfg),
 		IncludeManifest: cfg.Render.IncludeManifest,
 		Manifest: render.ManifestOptions{
 			GroupBySlice:           cfg.Render.Manifest.GroupBySlice,
@@ -419,6 +423,28 @@ func writeExplicitOutput(path string, rendered string) (string, error) {
 		return "", fmt.Errorf("write bundle: %w", err)
 	}
 	return path, nil
+}
+
+func treePathsFromDiscovery(discovered []discovery.PathInfo) []string {
+	out := make([]string, 0, len(discovered))
+	for _, pi := range discovered {
+		if pi.Excluded {
+			continue
+		}
+		out = append(out, pi.RelPath)
+	}
+	return out
+}
+
+func slicePatternsFromConfig(cfg config.Config) map[string]render.SlicePatterns {
+	out := make(map[string]render.SlicePatterns, len(cfg.Slices))
+	for s, sl := range cfg.Slices {
+		out[s] = render.SlicePatterns{
+			Include: append([]string(nil), sl.Include...),
+			Exclude: append([]string(nil), sl.Exclude...),
+		}
+	}
+	return out
 }
 
 func writeDefaultOutput(root string, cfg config.Config, profile string, gitsha string, ts time.Time, rendered string) (string, error) {

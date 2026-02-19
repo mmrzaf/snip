@@ -185,3 +185,125 @@ func TestRunWritesBundleForSimpleRepo(t *testing.T) {
 		t.Fatalf("bundle missing manifest:\n%s", out)
 	}
 }
+
+func TestRunTreeUsesDiscoveryNotSlicePatterns(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Root = root
+	cfg.DefaultProfile = "p"
+	cfg.Ignore.UseGitignore = true
+	cfg.Ignore.Always = append(cfg.Ignore.Always, "skip.me")
+	cfg.Slices = map[string]config.SliceConfig{
+		"code": {Include: []string{"**/*.go"}, Priority: 10},
+	}
+	cfg.Profiles = map[string]config.Profile{
+		"p": {Enable: []string{"code"}},
+	}
+
+	cfgPath := filepath.Join(root, ".snip.yaml")
+	if err := config.Write(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored.txt"), []byte("ignored\n"), 0o644); err != nil {
+		t.Fatalf("write ignored.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skip.me"), []byte("skip\n"), 0o644); err != nil {
+		t.Fatalf("write skip.me: %v", err)
+	}
+
+	outPath := filepath.Join(root, "bundle.md")
+	_, err := Run(context.Background(), RunOptions{
+		ConfigPath: cfgPath,
+		Profile:    "p",
+		Output:     outPath,
+		Now: func() time.Time {
+			return time.Date(2026, 2, 19, 10, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	out := string(b)
+
+	if !strings.Contains(out, "notes.txt") {
+		t.Fatalf("tree should include notes.txt from discovery:\n%s", out)
+	}
+	if strings.Contains(out, "ignored.txt") {
+		t.Fatalf("tree should not include gitignored file:\n%s", out)
+	}
+	if strings.Contains(out, "skip.me") {
+		t.Fatalf("tree should not include ignore.always file:\n%s", out)
+	}
+	if strings.Contains(out, "## 2) notes.txt") {
+		t.Fatalf("notes.txt should not be included content block:\n%s", out)
+	}
+}
+
+func TestRunManifestDroppedIncludesUnusedSlicePatterns(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Root = root
+	cfg.DefaultProfile = "p"
+	cfg.Ignore.UseGitignore = false
+	cfg.Slices = map[string]config.SliceConfig{
+		"code": {Include: []string{"**/*.go"}, Priority: 10},
+		"docs": {Include: []string{"**/*.md"}, Exclude: []string{"docs/private/**"}, Priority: 5},
+		"ops":  {Include: []string{"infra/**"}, Exclude: []string{"infra/tmp/**"}, Priority: 1},
+	}
+	cfg.Profiles = map[string]config.Profile{
+		"p": {Enable: []string{"code", "docs"}},
+	}
+
+	cfgPath := filepath.Join(root, ".snip.yaml")
+	if err := config.Write(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	outPath := filepath.Join(root, "bundle.md")
+	_, err := Run(context.Background(), RunOptions{
+		ConfigPath: cfgPath,
+		Profile:    "p",
+		Output:     outPath,
+		Now: func() time.Time {
+			return time.Date(2026, 2, 19, 10, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	out := string(b)
+	want := "- slice=docs reason=unused include=[**/*.md] exclude=[docs/private/**]"
+	if !strings.Contains(out, want) {
+		t.Fatalf("bundle missing unused slice manifest line:\nwant: %s\nout:\n%s", want, out)
+	}
+	wantNotEnabled := "- slice=ops reason=not_enabled include=[infra/**] exclude=[infra/tmp/**]"
+	if !strings.Contains(out, wantNotEnabled) {
+		t.Fatalf("bundle missing not_enabled slice manifest line:\nwant: %s\nout:\n%s", wantNotEnabled, out)
+	}
+}

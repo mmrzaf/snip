@@ -86,6 +86,9 @@ render:
     include_byte_counts: true
     include_truncation_notes: true
     include_unreadable_notes: true
+  file_block:
+    header: "<<<FILE:{path}>>>"
+    footer: ""
 
 budgets:
   max_chars: 120000
