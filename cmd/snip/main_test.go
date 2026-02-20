@@ -71,3 +71,47 @@ func TestRunCommandAcceptsDashModifierWithFollowingFlags(t *testing.T) {
 		t.Fatalf("test file block should be enabled by +tests:\n%s", out)
 	}
 }
+
+func TestApplyCommandWritesWithHeaderTemplate(t *testing.T) {
+	root := t.TempDir()
+
+	input := strings.Join([]string{
+		"header noise",
+		"===== FILE: pkg/x.go =====",
+		"lines: 1",
+		"```go",
+		"package x",
+		"```",
+		"",
+	}, "\n")
+	inputPath := filepath.Join(root, "ai.txt")
+	if err := os.WriteFile(inputPath, []byte(input), 0o644); err != nil {
+		t.Fatalf("write ai.txt: %v", err)
+	}
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	os.Args = []string{
+		"snip",
+		"--root",
+		root,
+		"apply",
+		inputPath,
+		"--file-header",
+		"===== FILE: {path} =====",
+		"--write",
+	}
+
+	if code := run(); code != app.ExitOK {
+		t.Fatalf("run() code=%d want=%d", code, app.ExitOK)
+	}
+
+	b, err := os.ReadFile(filepath.Join(root, "pkg", "x.go"))
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if string(b) != "package x\n" {
+		t.Fatalf("written content=%q", string(b))
+	}
+}

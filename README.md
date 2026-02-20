@@ -11,8 +11,6 @@ Deterministic means: given the same repo state + same config + same CLI args, sn
 
 ---
 
-Here’s a clean, execution-focused rewrite. Use this verbatim:
-
 ## Install
 
 ### Go (recommended)
@@ -44,15 +42,15 @@ snip
 Run an explicit profile:
 
 ```bash
-snip api
-snip debug
+snip run api
+snip run debug
 ```
 
 Toggle slices at runtime:
 
 ```bash
-snip api +tests
-snip debug -docs +configs
+snip run api +tests
+snip run debug -docs +configs
 ```
 
 ---
@@ -166,10 +164,10 @@ Examples:
 
 ```bash
 # add tests just for this run
-snip api +tests
+snip run api +tests
 
 # strip docs for debugging-focused snapshot
-snip debug -docs
+snip run debug -docs
 ```
 
 ---
@@ -181,8 +179,6 @@ snip debug -docs
 Goal: include core code + docs, skip heavy test/infra noise.
 
 ```bash
-snip api
-# or explicitly:
 snip run api
 ```
 
@@ -191,8 +187,6 @@ snip run api
 Goal: include tests/configs and deeper tree visibility.
 
 ```bash
-snip debug
-# or:
 snip debug +configs +tests
 ```
 
