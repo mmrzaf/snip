@@ -9,11 +9,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/mmrzaf/snip/internal/app"
 	"github.com/mmrzaf/snip/internal/config"
 	"github.com/mmrzaf/snip/internal/initwizard"
+	applytool "github.com/mmrzaf/snip/internal/tools/apply"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -92,8 +92,8 @@ snip ls api
 	rootCmd.AddCommand(newLsCmd(ctx, &cfgPath, &rootOverride, &verbose))
 	rootCmd.AddCommand(newDoctorCmd(ctx, &cfgPath, &rootOverride, &verbose))
 	rootCmd.AddCommand(newExplainCmd(ctx, &cfgPath, &rootOverride, &verbose))
+	rootCmd.AddCommand(newApplyCmd(&rootOverride))
 	rootCmd.AddCommand(newVersionCmd())
-
 	rootCmd.SetArgs(preprocessCLIArgs(os.Args[1:]))
 
 	if err := rootCmd.Execute(); err != nil {
@@ -419,6 +419,81 @@ snip explain internal/app/snip.go +tests
 	}
 	cmd.Flags().StringVar(&profile, "profile", "", "Profile (defaults to config default_profile)")
 	cmd.Flags().BoolVar(&includeHidden, "include-hidden", false, "Allow hidden files unless excluded by sensitive/ignore rules")
+	return cmd
+}
+
+func newApplyCmd(rootOverride *string) *cobra.Command {
+	var (
+		fileHeader string
+		write      bool
+		force      bool
+	)
+	cmd := &cobra.Command{
+		Use:   "apply <input-file>",
+		Short: "Apply AI-generated markdown code blocks to the filesystem",
+		Long: strings.TrimSpace(`
+Apply AI-generated markdown code blocks to the filesystem.
+Does not require snip format.
+`),
+		Args: cobra.ExactArgs(1),
+		Example: strings.TrimSpace(`
+snip apply ai.txt --file-header '===== FILE: {path} ====='
+snip apply ai.txt --file-header '<<<FILE:{path}>>>' --write --force
+`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(fileHeader) == "" {
+				return app.Wrap(app.ExitUsage, fmt.Errorf("--file-header is required (must contain {path})"))
+			}
+			res, err := applytool.Run(args[0], applytool.Options{
+				Root:       *rootOverride,
+				FileHeader: fileHeader,
+				Write:      write,
+				Force:      force,
+			})
+			if err != nil {
+				if applytool.IsKind(err, applytool.KindInvalidInput) {
+					return app.Wrap(app.ExitUsage, err)
+				}
+				if applytool.IsKind(err, applytool.KindIO) {
+					return app.Wrap(app.ExitIO, err)
+				}
+				return app.Wrap(app.ExitIO, err)
+			}
+
+			if !write {
+				if _, err := fmt.Fprintf(os.Stdout, "DRY-RUN: %d file(s)\n", len(res.Files)); err != nil {
+					return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+				}
+				for _, f := range res.Files {
+					action := "CREATE"
+					if f.Overwrite {
+						action = "OVERWRITE"
+					}
+					if _, err := fmt.Fprintf(os.Stdout, "%s %s (%d bytes)\n", action, f.RelPath, len(f.Content)); err != nil {
+						return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+					}
+				}
+				return nil
+			}
+
+			if _, err := fmt.Fprintf(os.Stdout, "WROTE: %d file(s)\n", res.Wrote); err != nil {
+				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+			}
+			for _, f := range res.Files {
+				action := "CREATED"
+				if f.Overwrite {
+					action = "OVERWROTE"
+				}
+				if _, err := fmt.Fprintf(os.Stdout, "%s %s\n", action, f.RelPath); err != nil {
+					return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&fileHeader, "file-header", "", "Header line template containing {path} (e.g. '===== FILE: {path} =====')")
+	cmd.Flags().BoolVar(&write, "write", false, "Write files to disk (default is dry-run)")
+	cmd.Flags().BoolVar(&force, "force", false, "Allow overwriting existing files")
 	return cmd
 }
 
