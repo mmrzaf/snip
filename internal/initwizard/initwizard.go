@@ -6,11 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-
 	"github.com/mmrzaf/snip/internal/config"
 	"github.com/mmrzaf/snip/internal/selector"
 )
@@ -21,10 +19,10 @@ type Options struct {
 	Force          bool
 	NonInteractive bool
 	ProfileDefault string
+	ProjectType    string // optional hint: "go", "python", "node", etc.
 }
 
 // Run creates a .snip.yaml configuration in the root directory.
-// It performs an evidence-based scan to pre-populate slices and profiles.
 func Run(opts Options) (string, error) {
 	root := opts.Root
 	if root == "" {
@@ -42,66 +40,30 @@ func Run(opts Options) (string, error) {
 		}
 	}
 
-	choices := defaultChoices(absRoot)
+	// Detect project type (or use explicit hint)
+	project := detectProject(absRoot, opts.ProjectType)
 
-	if !opts.NonInteractive {
-		in := bufio.NewReader(os.Stdin)
-		choices.IntentProfile = promptOneOf(in, "Primary intent / default profile [api/tests/full/minimal/debug]", choices.IntentProfile,
-			[]string{"api", "tests", "full", "minimal", "debug"})
-
-		choices.OutputDir = promptString(in, "Output dir", choices.OutputDir)
-		choices.OutputPattern = promptString(in, "Output pattern", choices.OutputPattern)
-
-		latest := promptYesNo(in, "Write latest alias file (last.md)", choices.WriteLatest)
-		choices.WriteLatest = latest
-
-		choices.TreeDepth = promptInt(in, "Tree depth", choices.TreeDepth, 1, 20)
-		choices.MaxChars = promptBudget(in, "Max chars budget", choices.MaxChars)
-
-		choices.DelimiterHeader = promptString(in, "File delimiter header (blank to disable)", choices.DelimiterHeader)
-		choices.DelimiterFooter = promptString(in, "File delimiter footer (blank to disable)", choices.DelimiterFooter)
-	}
-
-	cfg, counts, err := generateConfig(absRoot, choices)
+	// Gather all files (respecting a sensible default ignore list)
+	paths, err := collectRepoFiles(absRoot)
 	if err != nil {
 		return "", err
 	}
 
-	// Optional post-generation interactive slice toggle for the chosen default profile.
-	if !opts.NonInteractive {
-		in := bufio.NewReader(os.Stdin)
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Detected slices (file counts):")
-		printSliceCounts(os.Stderr, cfg, counts)
+	// Build slices tailored to the project
+	slices := buildSlices(project, paths)
 
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintf(os.Stderr, "Default profile is %q; enabled slices: [%s]\n", cfg.DefaultProfile, strings.Join(cfg.Profiles[cfg.DefaultProfile].Enable, ", "))
-		fmt.Fprintln(os.Stderr, "Adjust enabled slices for default profile using modifiers (e.g. +tests -docs). Blank to accept:")
+	// Build profiles from available slices
+	profiles := buildProfiles(project, slices)
 
-		line, _ := in.ReadString('\n')
-		line = strings.TrimSpace(line)
-		if line != "" {
-			fields := strings.Fields(line)
-			mods, err := selector.ParseModifiers(fields)
-			if err != nil {
-				return "", fmt.Errorf("invalid modifiers: %w", err)
-			}
-			p := cfg.Profiles[cfg.DefaultProfile]
-			p.Enable, err = applyModifiersToEnable(p.Enable, mods, cfg.Slices)
-			if err != nil {
-				return "", err
-			}
-			cfg.Profiles[cfg.DefaultProfile] = p
-
-			// If user gave --profile-default flag, honor it last.
-			if opts.ProfileDefault != "" {
-				cfg.DefaultProfile = opts.ProfileDefault
-			}
-		}
-	}
+	// Assemble the configuration
+	cfg := config.Default()
+	cfg.Name = filepath.Base(absRoot)
+	cfg.Root = "."
+	cfg.Slices = slices
+	cfg.Profiles = profiles
+	cfg.DefaultProfile = "default"
 
 	if opts.ProfileDefault != "" {
-		// Persist it.
 		if _, ok := cfg.Profiles[opts.ProfileDefault]; !ok {
 			return "", fmt.Errorf("unknown profile-default %q", opts.ProfileDefault)
 		}
@@ -117,465 +79,417 @@ func Run(opts Options) (string, error) {
 	return outPath, nil
 }
 
-type initChoices struct {
-	IntentProfile   string
-	OutputDir       string
-	OutputPattern   string
-	WriteLatest     bool
-	TreeDepth       int
-	MaxChars        int
-	DelimiterHeader string
-	DelimiterFooter string
+// ----------------------------------------------------------------------
+// Project detection
+// ----------------------------------------------------------------------
+
+type ProjectKind string
+
+const (
+	KindUnknown ProjectKind = "unknown"
+	KindGo      ProjectKind = "go"
+	KindPython  ProjectKind = "python"
+	KindNode    ProjectKind = "node"
+	KindRust    ProjectKind = "rust"
+	KindJava    ProjectKind = "java"
+	KindRuby    ProjectKind = "ruby"
+	KindPHP     ProjectKind = "php"
+	KindDotNet  ProjectKind = "dotnet"
+)
+
+type ProjectInfo struct {
+	Kind       ProjectKind
+	IsService  bool // has a main package, server entrypoint, etc.
+	IsLibrary  bool // no main, likely a library
+	IsWebApp   bool // frontend framework indicators
+	HasTests   bool // evidence of tests
+	HasDocs    bool // evidence of docs
+	HasConfigs bool // config files present
+	HasInfra   bool // CI/CD or container files
 }
 
-func defaultChoices(absRoot string) initChoices {
-	_ = absRoot
-	return initChoices{
-		IntentProfile:   "api",
-		OutputDir:       ".snip",
-		OutputPattern:   "snip_{profile}_{ts}_{gitsha}.md",
-		WriteLatest:     true,
-		TreeDepth:       4,
-		MaxChars:        120000,
-		DelimiterHeader: "<<<FILE:{path}>>>",
-		DelimiterFooter: "",
-	}
-}
+func detectProject(root string, hint string) ProjectInfo {
+	info := ProjectInfo{Kind: KindUnknown}
 
-// generateConfig is evidence-based: it only emits include globs that match actual repo structure/signals.
-// It returns cfg plus per-slice match counts (best-effort, used for interactive display).
-func generateConfig(absRoot string, choices initChoices) (config.Config, map[string]int, error) {
-	cfg := config.Default()
-	cfg.Name = filepath.Base(absRoot)
-	cfg.Root = "."
-	cfg.DefaultProfile = choices.IntentProfile
-
-	cfg.Output.Dir = choices.OutputDir
-	cfg.Output.Pattern = choices.OutputPattern
-	if choices.WriteLatest {
-		cfg.Output.Latest = "last.md"
+	// If hint provided, use it.
+	if hint != "" {
+		switch strings.ToLower(hint) {
+		case "go", "golang":
+			info.Kind = KindGo
+		case "python", "py":
+			info.Kind = KindPython
+		case "node", "nodejs", "javascript", "typescript":
+			info.Kind = KindNode
+		case "rust", "rs":
+			info.Kind = KindRust
+		case "java":
+			info.Kind = KindJava
+		case "ruby", "rb":
+			info.Kind = KindRuby
+		case "php":
+			info.Kind = KindPHP
+		case "dotnet", "csharp", "cs":
+			info.Kind = KindDotNet
+		}
 	} else {
-		cfg.Output.Latest = ""
-	}
-	cfg.Render.TreeDepth = choices.TreeDepth
-	cfg.Budgets.MaxChars = choices.MaxChars
-	cfg.Render.FileBlock.Header = choices.DelimiterHeader
-	cfg.Render.FileBlock.Footer = choices.DelimiterFooter
-
-	paths, err := collectRepoFiles(absRoot, cfg.Ignore.Always)
-	if err != nil {
-		return config.Config{}, nil, err
+		info.Kind = detectLanguage(root)
 	}
 
-	slices := standardSlicesEmpty()
+	// Further characteristics
+	info.IsService = hasMainIndicator(root, info.Kind)
+	info.IsLibrary = !info.IsService && hasLibraryIndicator(root, info.Kind)
+	info.IsWebApp = isWebApp(root, info.Kind)
+	info.HasTests = hasTestsIndicator(root, info.Kind)
+	info.HasDocs = hasDocsIndicator(root)
+	info.HasConfigs = hasConfigsIndicator(root)
+	info.HasInfra = hasInfraIndicator(root)
 
-	// Evidence: directory existence.
-	hasDir := func(rel string) bool {
-		st, err := os.Stat(filepath.Join(absRoot, rel))
-		return err == nil && st.IsDir()
-	}
-	hasFile := func(rel string) bool {
-		st, err := os.Stat(filepath.Join(absRoot, rel))
-		return err == nil && !st.IsDir()
-	}
-
-	isGoRepo := hasFile("go.mod")
-
-	// api slice: include only existing layout dirs.
-	if hasDir("cmd") {
-		slices["api"] = addIncludes(slices["api"], []string{"cmd/**"})
-	}
-	if hasDir("internal") {
-		slices["api"] = addIncludes(slices["api"], []string{"internal/**"})
-	}
-	if hasDir("pkg") {
-		slices["api"] = addIncludes(slices["api"], []string{"pkg/**"})
-	}
-	// If none exist but src exists, use src as fallback.
-	if len(slices["api"].Include) == 0 && hasDir("src") {
-		slices["api"] = addIncludes(slices["api"], []string{"src/**"})
-	}
-
-	// cli slice: only if cmd exists.
-	if hasDir("cmd") {
-		slices["cli"] = addIncludes(slices["cli"], []string{"cmd/**"})
-	}
-
-	// docs: README* always ok; docs/** only if docs exists.
-	slices["docs"] = addIncludes(slices["docs"], []string{"README*"})
-	if hasDir("docs") {
-		slices["docs"] = addIncludes(slices["docs"], []string{"docs/**"})
-	}
-
-	// tests: only add patterns if signals exist.
-	if isGoRepo {
-		// This is safe even if there are no tests.
-		slices["tests"] = addIncludes(slices["tests"], []string{"**/*_test.go"})
-	}
-	if hasDir("tests") {
-		slices["tests"] = addIncludes(slices["tests"], []string{"tests/**"})
-	}
-
-	// configs: only enable if any config-like files are present.
-	if anyMatch(paths, []string{"**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.ini"}) {
-		slices["configs"] = addIncludes(slices["configs"], []string{"**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.ini"})
-	}
-
-	// infra: only existing.
-	for _, d := range []string{".github", ".gitlab", "deploy", "infra", "terraform"} {
-		if hasDir(d) {
-			slices["infra"] = addIncludes(slices["infra"], []string{d + "/**"})
-		}
-	}
-
-	// scripts.
-	if hasDir("scripts") {
-		slices["scripts"] = addIncludes(slices["scripts"], []string{"scripts/**"})
-	}
-	if anyMatch(paths, []string{"**/*.sh"}) {
-		slices["scripts"] = addIncludes(slices["scripts"], []string{"**/*.sh"})
-	}
-
-	// schema: only if signals exist.
-	if anyMatch(paths, []string{"openapi.*", "swagger.*"}) {
-		slices["schema"] = addIncludes(slices["schema"], []string{"openapi.*", "swagger.*"})
-	}
-	if hasDir("proto") || anyMatch(paths, []string{"**/*.proto"}) {
-		slices["schema"] = addIncludes(slices["schema"], []string{"proto/**", "**/*.proto"})
-	}
-	if hasFile("schema.graphql") || anyMatch(paths, []string{"**/*.graphql"}) {
-		slices["schema"] = addIncludes(slices["schema"], []string{"schema.graphql", "**/*.graphql"})
-	}
-
-	// domain/persistence: only when directories exist (no guessing).
-	for _, d := range []string{"internal/domain", "src/domain"} {
-		if hasDir(d) {
-			slices["domain"] = addIncludes(slices["domain"], []string{d + "/**"})
-		}
-	}
-	for _, d := range []string{"internal/persistence", "src/persistence", "migrations"} {
-		if hasDir(d) {
-			slices["persistence"] = addIncludes(slices["persistence"], []string{d + "/**"})
-		}
-	}
-
-	cfg.Slices = slices
-
-	// Count matches per slice for UI.
-	counts := map[string]int{}
-	for name, sl := range cfg.Slices {
-		counts[name] = countMatches(paths, sl.Include)
-	}
-
-	cfg.Profiles = generateProfiles(cfg.Slices, counts, choices.IntentProfile)
-
-	// Force-persist default profile exists.
-	if _, ok := cfg.Profiles[cfg.DefaultProfile]; !ok {
-		cfg.DefaultProfile = "api"
-		if _, ok := cfg.Profiles[cfg.DefaultProfile]; !ok {
-			// pick deterministic first
-			cfg.DefaultProfile = firstProfile(cfg.Profiles)
-		}
-	}
-
-	return cfg, counts, nil
+	return info
 }
 
-func standardSlicesEmpty() map[string]config.SliceConfig {
-	return map[string]config.SliceConfig{
-		"api":         {Include: []string{}, Exclude: []string{}, Priority: 100},
-		"tests":       {Include: []string{}, Exclude: []string{}, Priority: 40},
-		"docs":        {Include: []string{}, Exclude: []string{}, Priority: 20},
-		"schema":      {Include: []string{}, Exclude: []string{}, Priority: 25},
-		"infra":       {Include: []string{}, Exclude: []string{}, Priority: 10},
-		"configs":     {Include: []string{}, Exclude: []string{}, Priority: 15},
-		"scripts":     {Include: []string{}, Exclude: []string{}, Priority: 5},
-		"cli":         {Include: []string{}, Exclude: []string{}, Priority: 12},
-		"domain":      {Include: []string{}, Exclude: []string{}, Priority: 18},
-		"persistence": {Include: []string{}, Exclude: []string{}, Priority: 14},
+func detectLanguage(root string) ProjectKind {
+	markers := map[string]ProjectKind{
+		"go.mod":           KindGo,
+		"requirements.txt": KindPython,
+		"setup.py":         KindPython,
+		"pyproject.toml":   KindPython,
+		"Pipfile":          KindPython,
+		"package.json":     KindNode,
+		"yarn.lock":        KindNode,
+		"pnpm-lock.yaml":   KindNode,
+		"Cargo.toml":       KindRust,
+		"pom.xml":          KindJava,
+		"build.gradle":     KindJava,
+		"Gemfile":          KindRuby,
+		"composer.json":    KindPHP,
 	}
+	for file, kind := range markers {
+		if _, err := os.Stat(filepath.Join(root, file)); err == nil {
+			return kind
+		}
+	}
+	// Check for .csproj or .sln
+	if matches, _ := filepath.Glob(filepath.Join(root, "*.csproj")); len(matches) > 0 {
+		return KindDotNet
+	}
+	if matches, _ := filepath.Glob(filepath.Join(root, "*.sln")); len(matches) > 0 {
+		return KindDotNet
+	}
+	return KindUnknown
 }
 
-func generateProfiles(slices map[string]config.SliceConfig, counts map[string]int, intent string) map[string]config.Profile {
-	nonEmpty := func(name string) bool {
-		sl, ok := slices[name]
-		if !ok {
-			return false
-		}
-		// Consider "non-empty" if it has includes and matches at least one file.
-		if len(sl.Include) == 0 {
-			return false
-		}
-		return counts[name] > 0
-	}
-
-	// Helper: always include api slice if present; even if empty, so profiles remain usable.
-	apiEnable := []string{"api"}
-	if _, ok := slices["api"]; !ok {
-		apiEnable = []string{}
-	}
-
-	// Baselines, but only enable relevant slices (non-empty).
-	apiProfile := []string{}
-	apiProfile = append(apiProfile, apiEnable...)
-	for _, s := range []string{"docs", "configs", "schema"} {
-		if nonEmpty(s) {
-			apiProfile = append(apiProfile, s)
-		}
-	}
-	if len(apiProfile) == 0 {
-		// fallback: enable any slice that exists.
-		apiProfile = append(apiProfile, firstSliceName(slices))
-	}
-
-	testsProfile := []string{}
-	if nonEmpty("tests") {
-		testsProfile = append(testsProfile, "tests")
-	}
-	testsProfile = appendUnique(testsProfile, apiEnable...)
-	if nonEmpty("domain") {
-		testsProfile = appendUnique(testsProfile, "domain")
-	}
-	if len(testsProfile) == 0 {
-		testsProfile = append(testsProfile, apiProfile...)
-	}
-
-	fullProfile := []string{}
-	// Enable all non-empty slices; if none, enable api.
-	for name := range slices {
-		if nonEmpty(name) {
-			fullProfile = append(fullProfile, name)
-		}
-	}
-	sort.Strings(fullProfile)
-	if len(fullProfile) == 0 {
-		fullProfile = append(fullProfile, apiProfile...)
-	}
-
-	minimalProfile := []string{}
-	minimalProfile = append(minimalProfile, apiEnable...)
-	if len(minimalProfile) == 0 {
-		minimalProfile = append(minimalProfile, apiProfile...)
-	}
-
-	debugProfile := []string{}
-	debugProfile = append(debugProfile, apiEnable...)
-	for _, s := range []string{"tests", "docs", "schema"} {
-		if nonEmpty(s) {
-			debugProfile = appendUnique(debugProfile, s)
-		}
-	}
-	if len(debugProfile) == 0 {
-		debugProfile = append(debugProfile, fullProfile...)
-	}
-
-	// Budgets per architecture defaults.
-	profiles := map[string]config.Profile{
-		"api": {
-			Enable: apiProfile,
-			Budgets: config.BudgetOverride{
-				MaxChars: 120000,
-			},
-			Render: config.RenderOverride{TreeDepth: 4},
-		},
-		"tests": {
-			Enable: testsProfile,
-			Budgets: config.BudgetOverride{
-				MaxChars: 120000,
-			},
-			Render: config.RenderOverride{TreeDepth: 4},
-		},
-		"full": {
-			Enable: fullProfile,
-			Budgets: config.BudgetOverride{
-				MaxChars: 220000,
-			},
-			Render: config.RenderOverride{TreeDepth: 5},
-		},
-		"minimal": {
-			Enable: minimalProfile,
-			Budgets: config.BudgetOverride{
-				MaxChars: 80000,
-			},
-			Render: config.RenderOverride{TreeDepth: 3},
-		},
-		"debug": {
-			Enable: debugProfile,
-			Budgets: config.BudgetOverride{
-				MaxChars: 220000,
-			},
-			Render: config.RenderOverride{TreeDepth: 5},
-		},
-	}
-
-	return profiles
-}
-
-func appendUnique(in []string, values ...string) []string {
-	for _, v := range values {
-		found := false
-		for _, x := range in {
-			if x == v {
-				found = true
-				break
-			}
-		}
-		if !found {
-			in = append(in, v)
-		}
-	}
-	return in
-}
-
-func firstProfile(m map[string]config.Profile) string {
-	names := make([]string, 0, len(m))
-	for k := range m {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
-}
-
-func firstSliceName(m map[string]config.SliceConfig) string {
-	names := make([]string, 0, len(m))
-	for k := range m {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
-}
-
-func addIncludes(sl config.SliceConfig, pats []string) config.SliceConfig {
-	seen := map[string]bool{}
-	for _, p := range sl.Include {
-		seen[p] = true
-	}
-	for _, p := range pats {
-		if p == "" {
-			continue
-		}
-		if !seen[p] {
-			sl.Include = append(sl.Include, p)
-			seen[p] = true
-		}
-	}
-	sort.Strings(sl.Include)
-	return sl
-}
-
-func collectRepoFiles(absRoot string, ignoreAlways []string) ([]string, error) {
-	var out []string
-	skipDir := func(rel string) bool {
-		rel = strings.TrimSuffix(rel, "/")
-		if rel == "" {
-			return false
-		}
-		relSlash := filepath.ToSlash(rel)
-		for _, pat := range ignoreAlways {
-			ok, err := doublestar.Match(pat, relSlash+"/")
-			if err != nil {
-				continue
-			}
-			if ok {
-				return true
-			}
-		}
+func hasMainIndicator(root string, kind ProjectKind) bool {
+	switch kind {
+	case KindGo:
+		return dirExists(root, "cmd") || fileExists(root, "main.go")
+	case KindPython:
+		return fileExists(root, "app.py") || fileExists(root, "main.py") ||
+			dirExists(root, "routers") || dirExists(root, "api")
+	case KindNode:
+		return fileExists(root, "server.js") || fileExists(root, "index.js") ||
+			dirExists(root, "pages/api") || dirExists(root, "app/api")
+	case KindRust:
+		return fileExists(root, "src/main.rs")
+	case KindJava:
+		return dirExists(root, "src/main/java")
+	case KindRuby:
+		return fileExists(root, "config.ru") || dirExists(root, "app/controllers")
+	case KindPHP:
+		return dirExists(root, "public") || fileExists(root, "index.php")
+	case KindDotNet:
+		return fileExists(root, "Program.cs") || fileExists(root, "Startup.cs")
+	default:
 		return false
 	}
+}
 
-	err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+func hasLibraryIndicator(root string, kind ProjectKind) bool {
+	// Opposite of service indicators, plus common lib patterns
+	switch kind {
+	case KindGo:
+		return !hasMainIndicator(root, kind) && (dirExists(root, "pkg") || dirExists(root, "internal"))
+	case KindPython:
+		return dirExists(root, "src") && !hasMainIndicator(root, kind)
+	case KindNode:
+		return fileExists(root, "index.js") && !hasMainIndicator(root, kind)
+	default:
+		return false
+	}
+}
+
+func isWebApp(root string, kind ProjectKind) bool {
+	if kind != KindNode {
+		return false
+	}
+	markers := []string{
+		"vite.config.*", "webpack.config.js", "next.config.js",
+		"src/App.jsx", "src/App.tsx", "src/App.vue", "angular.json",
+	}
+	for _, pat := range markers {
+		if matches, _ := filepath.Glob(filepath.Join(root, pat)); len(matches) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTestsIndicator(root string, kind ProjectKind) bool {
+	switch kind {
+	case KindGo:
+		return anyFileMatch(root, "**/*_test.go")
+	case KindPython:
+		return dirExists(root, "tests") || dirExists(root, "test") ||
+			anyFileMatch(root, "**/test_*.py") || anyFileMatch(root, "**/*_test.py")
+	case KindNode:
+		return dirExists(root, "test") || dirExists(root, "tests") ||
+			anyFileMatch(root, "**/*.test.js") || anyFileMatch(root, "**/*.spec.ts")
+	case KindRust:
+		return dirExists(root, "tests") || anyFileMatch(root, "**/*_test.rs")
+	case KindJava:
+		return dirExists(root, "src/test/java")
+	default:
+		return false
+	}
+}
+
+func hasDocsIndicator(root string) bool {
+	return fileExists(root, "README.md") || dirExists(root, "docs")
+}
+
+func hasConfigsIndicator(root string) bool {
+	patterns := []string{"**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.ini", ".env.example"}
+	for _, pat := range patterns {
+		if anyFileMatch(root, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasInfraIndicator(root string) bool {
+	markers := []string{".github", ".gitlab", "Dockerfile", "docker-compose.yml", "Makefile", "justfile"}
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(root, m)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ----------------------------------------------------------------------
+// Slice generation
+// ----------------------------------------------------------------------
+
+func buildSlices(proj ProjectInfo, paths []string) map[string]config.SliceConfig {
+	slices := make(map[string]config.SliceConfig)
+
+	// Language‑specific code slice
+	codePatterns := codePatternsFor(proj.Kind)
+	if len(codePatterns) > 0 && countMatches(paths, codePatterns) > 0 {
+		slices["code"] = config.SliceConfig{
+			Include:  codePatterns,
+			Priority: 100,
+		}
+	}
+
+	// Tests slice
+	if proj.HasTests {
+		testPatterns := testPatternsFor(proj.Kind)
+		if len(testPatterns) > 0 && countMatches(paths, testPatterns) > 0 {
+			slices["tests"] = config.SliceConfig{
+				Include:  testPatterns,
+				Priority: 40,
+			}
+		}
+	}
+
+	// Universal slices (if they match files)
+	addUniversalSlice(slices, "docs", []string{"README*", "docs/**", "*.md"}, 20, paths)
+	addUniversalSlice(slices, "configs", []string{
+		"**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.ini",
+		".env.example", "*.config.js", "*.config.ts",
+	}, 15, paths)
+	addUniversalSlice(slices, "infra", []string{
+		".github/**", ".gitlab/**", "Dockerfile*", "docker-compose*.yml",
+		"Makefile", "justfile",
+	}, 10, paths)
+	addUniversalSlice(slices, "scripts", []string{
+		"scripts/**", "**/*.sh", "**/*.ps1",
+	}, 5, paths)
+
+	// Special case for frontend web apps: separate components/styles/etc.
+	if proj.IsWebApp {
+		addUniversalSlice(slices, "components", []string{"src/components/**", "src/views/**"}, 90, paths)
+		addUniversalSlice(slices, "pages", []string{"src/pages/**", "src/routes/**", "app/**", "pages/**"}, 80, paths)
+		addUniversalSlice(slices, "styles", []string{"**/*.css", "**/*.scss", "**/*.less"}, 30, paths)
+	}
+
+	// Ensure at least one slice exists
+	if len(slices) == 0 {
+		slices["code"] = config.SliceConfig{
+			Include:  []string{"**/*"},
+			Priority: 100,
+		}
+	}
+
+	return slices
+}
+
+func codePatternsFor(kind ProjectKind) []string {
+	switch kind {
+	case KindGo:
+		return []string{"**/*.go", "!**/*_test.go"}
+	case KindPython:
+		return []string{"**/*.py", "!**/test_*.py", "!**/*_test.py", "!tests/**"}
+	case KindNode:
+		return []string{"**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx", "!**/*.test.*", "!**/*.spec.*"}
+	case KindRust:
+		return []string{"**/*.rs", "!tests/**", "!**/*_test.rs"}
+	case KindJava:
+		return []string{"src/main/java/**/*.java"}
+	case KindRuby:
+		return []string{"**/*.rb", "!test/**", "!spec/**"}
+	case KindPHP:
+		return []string{"**/*.php", "!tests/**"}
+	case KindDotNet:
+		return []string{"**/*.cs", "!**/*.Tests/**", "!**/*Test.cs"}
+	default:
+		// Broad set of common source extensions
+		return []string{"**/*.go", "**/*.py", "**/*.js", "**/*.ts", "**/*.rs", "**/*.java", "**/*.rb", "**/*.php", "**/*.cs"}
+	}
+}
+
+func testPatternsFor(kind ProjectKind) []string {
+	switch kind {
+	case KindGo:
+		return []string{"**/*_test.go"}
+	case KindPython:
+		return []string{"tests/**", "test/**", "**/test_*.py", "**/*_test.py"}
+	case KindNode:
+		return []string{"test/**", "tests/**", "**/*.test.js", "**/*.spec.ts", "**/__tests__/**"}
+	case KindRust:
+		return []string{"tests/**", "**/*_test.rs"}
+	case KindJava:
+		return []string{"src/test/java/**"}
+	case KindRuby:
+		return []string{"test/**", "spec/**"}
+	case KindPHP:
+		return []string{"tests/**", "**/*Test.php"}
+	case KindDotNet:
+		return []string{"**/*.Tests/**", "**/*Test.cs"}
+	default:
+		return []string{"test/**", "tests/**", "**/*_test.*", "**/*.test.*", "**/*.spec.*"}
+	}
+}
+
+func addUniversalSlice(m map[string]config.SliceConfig, name string, patterns []string, priority int, paths []string) {
+	if countMatches(paths, patterns) > 0 {
+		m[name] = config.SliceConfig{
+			Include:  patterns,
+			Priority: priority,
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+// Profile generation
+// ----------------------------------------------------------------------
+
+func buildProfiles(proj ProjectInfo, slices map[string]config.SliceConfig) map[string]config.Profile {
+	// Default: core code + essential universal slices
+	defaultEnable := []string{}
+	if _, ok := slices["code"]; ok {
+		defaultEnable = append(defaultEnable, "code")
+	}
+	for _, s := range []string{"docs", "configs"} {
+		if _, ok := slices[s]; ok {
+			defaultEnable = append(defaultEnable, s)
+		}
+	}
+	if proj.IsWebApp {
+		for _, s := range []string{"components", "pages"} {
+			if _, ok := slices[s]; ok && !contains(defaultEnable, s) {
+				defaultEnable = append(defaultEnable, s)
+			}
+		}
+	}
+	if len(defaultEnable) == 0 {
+		// fallback to first available slice
+		for n := range slices {
+			defaultEnable = []string{n}
+			break
+		}
+	}
+
+	// Full: everything
+	fullEnable := make([]string, 0, len(slices))
+	for n := range slices {
+		fullEnable = append(fullEnable, n)
+	}
+	sort.Strings(fullEnable)
+
+	// Minimal: only the core code slice
+	minimalEnable := []string{}
+	if _, ok := slices["code"]; ok {
+		minimalEnable = []string{"code"}
+	} else {
+		minimalEnable = defaultEnable[:1]
+	}
+
+	// Debug: default + tests
+	debugEnable := defaultEnable
+	if _, ok := slices["tests"]; ok && !contains(debugEnable, "tests") {
+		debugEnable = append(debugEnable, "tests")
+	}
+
+	return map[string]config.Profile{
+		"default": {Enable: defaultEnable},
+		"full":    {Enable: fullEnable},
+		"minimal": {Enable: minimalEnable},
+		"debug":   {Enable: debugEnable},
+	}
+}
+
+// ----------------------------------------------------------------------
+// Interactive review
+// ----------------------------------------------------------------------
+
+func interactiveReview(cfg *config.Config, slices map[string]config.SliceConfig, profiles map[string]config.Profile) error {
+	in := bufio.NewReader(os.Stdin)
+
+	fmt.Fprintln(os.Stderr, "\nDetected slices (with file matches):")
+	printSliceSummary(os.Stderr, slices, profiles["default"].Enable)
+
+	fmt.Fprintf(os.Stderr, "\nDefault profile will include: %s\n", strings.Join(profiles["default"].Enable, ", "))
+	fmt.Fprintln(os.Stderr, "You can adjust using modifiers (e.g., +tests -configs). Press Enter to accept.")
+
+	line, _ := in.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line != "" {
+		fields := strings.Fields(line)
+		mods, err := selector.ParseModifiers(fields)
 		if err != nil {
-			// Init should be resilient: ignore traversal errors.
-			return nil
+			return fmt.Errorf("invalid modifiers: %w", err)
 		}
-		if path == absRoot {
-			return nil
+		newEnable, err := applyModifiersToEnable(profiles["default"].Enable, mods, slices)
+		if err != nil {
+			return err
 		}
-		rel, rerr := filepath.Rel(absRoot, path)
-		if rerr != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-
-		if d.Type()&os.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			if skipDir(rel) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		// Only keep regular files.
-		info, ierr := d.Info()
-		if ierr != nil {
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-
-		out = append(out, rel)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk: %w", err)
+		profiles["default"] = config.Profile{Enable: newEnable}
+		cfg.Profiles = profiles
 	}
-
-	sort.Strings(out)
-	return out, nil
+	return nil
 }
 
-func anyMatch(paths []string, patterns []string) bool {
-	return countMatches(paths, patterns) > 0
-}
-
-func countMatches(paths []string, patterns []string) int {
-	if len(patterns) == 0 {
-		return 0
-	}
-	var c int
-	for _, p := range paths {
-		for _, pat := range patterns {
-			ok, err := doublestar.Match(pat, p)
-			if err != nil {
-				continue
-			}
-			if ok {
-				c++
-				break
-			}
-		}
-	}
-	return c
-}
-
-func printSliceCounts(w *os.File, cfg config.Config, counts map[string]int) {
+func printSliceSummary(w *os.File, slices map[string]config.SliceConfig, enabled []string) {
 	type row struct {
 		name     string
 		enabled  bool
 		priority int
-		count    int
-		includes []string
 	}
 	var rows []row
-	for name, sl := range cfg.Slices {
-		rows = append(rows, row{
-			name:     name,
-			enabled:  contains(cfg.Profiles[cfg.DefaultProfile].Enable, name),
-			priority: sl.Priority,
-			count:    counts[name],
-			includes: sl.Include,
-		})
+	for name, sl := range slices {
+		rows = append(rows, row{name, contains(enabled, name), sl.Priority})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].priority != rows[j].priority {
@@ -588,13 +502,87 @@ func printSliceCounts(w *os.File, cfg config.Config, counts map[string]int) {
 		if r.enabled {
 			mark = "x"
 		}
-		_, _ = fmt.Fprintf(w, "  [%s] %-12s  files=%-5d  include=%v\n", mark, r.name, r.count, r.includes)
+		fmt.Fprintf(w, "  [%s] %-12s  priority=%d\n", mark, r.name, r.priority)
 	}
 }
 
-func contains(in []string, v string) bool {
-	for _, x := range in {
-		if x == v {
+// ----------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------
+
+func collectRepoFiles(root string) ([]string, error) {
+	ignorePatterns := []string{
+		".git/**", "node_modules/**", "dist/**", "build/**", ".venv/**", "venv/**",
+		"__pycache__/**", "*.pyc", ".pytest_cache/**", "coverage/**", "target/**", ".snip/**",
+	}
+	var out []string
+	skipDir := func(rel string) bool {
+		relSlash := filepath.ToSlash(rel) + "/"
+		for _, pat := range ignorePatterns {
+			ok, _ := doublestar.Match(pat, relSlash)
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || path == root {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if skipDir(rel) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		out = append(out, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func countMatches(paths []string, patterns []string) int {
+	var c int
+	for _, p := range paths {
+		for _, pat := range patterns {
+			ok, _ := doublestar.Match(pat, p)
+			if ok {
+				c++
+				break
+			}
+		}
+	}
+	return c
+}
+
+func anyFileMatch(root, pattern string) bool {
+	matches, _ := doublestar.FilepathGlob(filepath.Join(root, pattern))
+	return len(matches) > 0
+}
+
+func fileExists(root, name string) bool {
+	_, err := os.Stat(filepath.Join(root, name))
+	return err == nil
+}
+
+func dirExists(root, name string) bool {
+	info, err := os.Stat(filepath.Join(root, name))
+	return err == nil && info.IsDir()
+}
+
+func contains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
 			return true
 		}
 	}
@@ -620,113 +608,7 @@ func applyModifiersToEnable(current []string, mods []selector.Modifier, slices m
 	}
 	sort.Strings(out)
 	if len(out) == 0 {
-		return nil, fmt.Errorf("default profile must enable at least one slice")
+		return nil, fmt.Errorf("profile must enable at least one slice")
 	}
 	return out, nil
-}
-
-// ---- prompts ----
-
-func promptString(in *bufio.Reader, label string, def string) string {
-	fmt.Fprintf(os.Stderr, "%s [%s]: ", label, def)
-	line, err := in.ReadString('\n')
-	if err != nil {
-		return def
-	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return def
-	}
-	return line
-}
-
-func promptOneOf(in *bufio.Reader, label string, def string, allowed []string) string {
-	allowedSet := map[string]bool{}
-	for _, a := range allowed {
-		allowedSet[a] = true
-	}
-	for {
-		fmt.Fprintf(os.Stderr, "%s [%s]: ", label, def)
-		line, err := in.ReadString('\n')
-		if err != nil {
-			return def
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return def
-		}
-		if allowedSet[line] {
-			return line
-		}
-		fmt.Fprintf(os.Stderr, "Invalid value %q. Allowed: %s\n", line, strings.Join(allowed, ", "))
-	}
-}
-
-func promptYesNo(in *bufio.Reader, label string, def bool) bool {
-	defStr := "y"
-	if !def {
-		defStr = "n"
-	}
-	for {
-		fmt.Fprintf(os.Stderr, "%s [y/n] [%s]: ", label, defStr)
-		line, err := in.ReadString('\n')
-		if err != nil {
-			return def
-		}
-		line = strings.TrimSpace(strings.ToLower(line))
-		if line == "" {
-			return def
-		}
-		if line == "y" || line == "yes" {
-			return true
-		}
-		if line == "n" || line == "no" {
-			return false
-		}
-		fmt.Fprintln(os.Stderr, "Enter y or n.")
-	}
-}
-
-func promptInt(in *bufio.Reader, label string, def int, min int, max int) int {
-	for {
-		fmt.Fprintf(os.Stderr, "%s [%d]: ", label, def)
-		line, err := in.ReadString('\n')
-		if err != nil {
-			return def
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return def
-		}
-		v, err := strconv.Atoi(line)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Enter a number.")
-			continue
-		}
-		if v < min || v > max {
-			fmt.Fprintf(os.Stderr, "Enter a number between %d and %d.\n", min, max)
-			continue
-		}
-		return v
-	}
-}
-
-func promptBudget(in *bufio.Reader, label string, def int) int {
-	for {
-		fmt.Fprintf(os.Stderr, "%s (e.g. 120000, 200000) [%d]: ", label, def)
-		line, err := in.ReadString('\n')
-		if err != nil {
-			return def
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return def
-		}
-		v, err := strconv.Atoi(line)
-		if err != nil || v <= 0 {
-			fmt.Fprintln(os.Stderr, "Enter a positive integer.")
-			continue
-		}
-		return v
-	}
 }
