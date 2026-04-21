@@ -92,8 +92,80 @@ func Run(inputPath string, opts Options) (Result, error) {
 	return Apply(blocks, opts)
 }
 
+// fenceInfo holds the parsed properties of an opening fence.
+type fenceInfo struct {
+	char  byte
+	count int
+	line  string // original trimmed line (for potential future use)
+}
+
+// parseFenceOpen examines a line and returns fence info if it is a valid opening fence.
+// It follows CommonMark: a line that begins with at least three backticks or tildes.
+// The remainder of the line may contain an info string (e.g., language).
+func parseFenceOpen(line string) (info fenceInfo, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < 3 {
+		return fenceInfo{}, false
+	}
+	c := trimmed[0]
+	if c != '`' && c != '~' {
+		return fenceInfo{}, false
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == c {
+		n++
+	}
+	if n < 3 {
+		return fenceInfo{}, false
+	}
+	return fenceInfo{char: c, count: n, line: trimmed}, true
+}
+
+// isFenceClose checks if a line is a valid closing fence for the given opening info.
+// It follows CommonMark: the line must start with at least minCount fence chars
+// (after stripping leading whitespace), and the remainder (after all fence chars)
+// must consist only of whitespace (i.e., no info string).
+func isFenceClose(line string, open fenceInfo) bool {
+	leftTrimmed := strings.TrimLeft(line, " \t")
+	if len(leftTrimmed) < open.count {
+		return false
+	}
+	// Must start with the same fence char repeated at least open.count times.
+	for i := 0; i < open.count; i++ {
+		if leftTrimmed[i] != open.char {
+			return false
+		}
+	}
+	// Any additional characters beyond the minimum count must also be the fence char.
+	i := open.count
+	for i < len(leftTrimmed) && leftTrimmed[i] == open.char {
+		i++
+	}
+	// The rest of the line (after stripping all fence chars) must be only whitespace.
+	rest := leftTrimmed[i:]
+	return strings.TrimSpace(rest) == ""
+}
+
+// countFenceChars returns the number of consecutive occurrences of char at the start
+// of the trimmed line, or 0 if the line does not consist solely of that char + whitespace.
+func countFenceChars(line string, char byte) int {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 || trimmed[0] != char {
+		return 0
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == char {
+		n++
+	}
+	// Ensure the rest is only whitespace (closing fence condition).
+	if strings.TrimSpace(trimmed[n:]) != "" {
+		return 0
+	}
+	return n
+}
+
 // Parse extracts file blocks from markdown-like text using a header template such as
-// "===== FILE: {path} =====". It is intentionally strict and fails on ambiguity.
+// "===== FILE: {path} =====". It handles nested code fences correctly.
 func Parse(input string, fileHeader string) ([]Block, error) {
 	hm, err := compileHeaderMatcher(fileHeader)
 	if err != nil {
@@ -107,8 +179,7 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 	// Track whether we are inside a *non-apply* fenced block.
 	// If we are, headers are ignored until the fence closes.
 	inFence := false
-	var fenceChar byte
-	var fenceMinCount int
+	var fenceInfoCurrent fenceInfo
 
 	i := 0
 	lineNo := 0
@@ -123,20 +194,18 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 		// If we're currently inside an arbitrary fence (not part of a file block),
 		// ignore everything until it closes.
 		if inFence {
-			if isFenceClose(line, fenceChar, fenceMinCount) {
+			if isFenceClose(line, fenceInfoCurrent) {
 				inFence = false
-				fenceChar = 0
-				fenceMinCount = 0
+				fenceInfoCurrent = fenceInfo{}
 			}
 			continue
 		}
 
 		// If we see an arbitrary opening fence, enter fence mode.
 		// This prevents matching headers inside unrelated code blocks.
-		if ch, n, okFence := parseFenceOpen(line); okFence {
+		if info, ok := parseFenceOpen(line); ok {
 			inFence = true
-			fenceChar = ch
-			fenceMinCount = n
+			fenceInfoCurrent = info
 			continue
 		}
 
@@ -155,15 +224,12 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 		}
 		seen[path] = lineNo
 
-		// Scan forward for the next opening fence, allowing metadata/noise lines.
+		// Scan forward for the next opening fence (the outer fence of the file block).
 		var (
-			foundOpen     bool
-			openLineNo    int
-			contentStart  int
-			closeLineNo   int
-			contentEnd    int
-			blockFenceChr byte
-			blockMinCount int
+			foundOpen    bool
+			openLineNo   int
+			blockFence   fenceInfo
+			contentStart int
 		)
 
 		j := i
@@ -180,11 +246,10 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 				return nil, invalidf("header at line %d for %q has no code fence before next header at line %d", lineNo, path, ln)
 			}
 
-			if ch, n, okFence := parseFenceOpen(l2); okFence {
+			if info, ok := parseFenceOpen(l2); ok {
 				foundOpen = true
 				openLineNo = ln
-				blockFenceChr = ch
-				blockMinCount = n
+				blockFence = info
 				contentStart = next2
 				j = next2
 				break
@@ -195,21 +260,48 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 			return nil, invalidf("header at line %d for %q has no code fence", lineNo, path)
 		}
 
-		// Scan until closing fence.
+		// Use a stack to track nested fences.
+		// The outer block ends when the stack becomes empty.
+		stack := []fenceInfo{blockFence}
+		contentEnd := -1
+		closeLineNo := 0
+
 		for {
 			l3, next3, ok3 := readLine(src, j)
 			if !ok3 {
 				break
 			}
 			ln++
-			if isFenceClose(l3, blockFenceChr, blockMinCount) {
-				closeLineNo = ln
-				contentEnd = j
-				j = next3
-				break
+
+			// IMPORTANT: If we are inside a fence (stack non-empty), we must first check
+			// if this line closes the current top. Only if it does NOT close do we consider
+			// it as a possible opening fence. This prevents the same line from being
+			// misinterpreted as both an opening and a closing fence.
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				if isFenceClose(l3, top) {
+					// This line closes the top fence.
+					stack = stack[:len(stack)-1]
+					if len(stack) == 0 {
+						// This is the closing fence of the outer block.
+						closeLineNo = ln
+						contentEnd = j
+						j = next3
+						break
+					}
+					// It was an inner closing fence; continue scanning.
+					j = next3
+					continue
+				}
+			}
+
+			// Not a closing fence; check if it's an opening fence.
+			if openInfo, okOpen := parseFenceOpen(l3); okOpen {
+				stack = append(stack, openInfo)
 			}
 			j = next3
 		}
+
 		if closeLineNo == 0 {
 			return nil, invalidf("unclosed code fence for %q (header line %d, fence line %d)", path, lineNo, openLineNo)
 		}
@@ -404,37 +496,4 @@ func readLine(s string, start int) (line string, next int, ok bool) {
 		return s[start:i], i + 1, true
 	}
 	return s[start:i], i, true
-}
-
-func parseFenceOpen(line string) (char byte, count int, ok bool) {
-	t := strings.TrimSpace(line)
-	if len(t) < 3 {
-		return 0, 0, false
-	}
-	c := t[0]
-	if c != '`' && c != '~' {
-		return 0, 0, false
-	}
-	n := 0
-	for n < len(t) && t[n] == c {
-		n++
-	}
-	if n < 3 {
-		return 0, 0, false
-	}
-	// Any suffix is allowed (language/info string).
-	return c, n, true
-}
-
-func isFenceClose(line string, char byte, minCount int) bool {
-	t := strings.TrimSpace(line)
-	if len(t) < minCount {
-		return false
-	}
-	for i := 0; i < len(t); i++ {
-		if t[i] != char {
-			return false
-		}
-	}
-	return true
 }
