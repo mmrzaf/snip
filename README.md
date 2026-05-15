@@ -1,13 +1,7 @@
-# snip
+# Snip
 
-**snip** bundles source context into **deterministic** Markdown snapshots for AI/code review/debugging.
-
-Deterministic means: given the same repo state + same config + same CLI args, snip produces the **same ordering and decisions**:
-
-- stable discovery ordering (sorted relpaths)
-- stable slice membership resolution
-- stable truncation + budget enforcement
-- stable rendering order
+**snip** bundles source context into **deterministic** Markdown snapshots for AI tools, code review, or debugging.  
+Deterministic means: same repo state + same config + same CLI arguments → same ordering, same inclusion decisions, same output.
 
 ---
 
@@ -21,43 +15,42 @@ go install github.com/mmrzaf/snip/cmd/snip@latest
 
 ### Prebuilt binaries
 
-Download the appropriate binary for your platform from the **Releases** page and place it in your `$PATH`.
+Download the binary for your platform from the [Releases](https://github.com/mmrzaf/snip/releases) page and place it in your `$PATH`.
 
 ---
 
 ## Quick start
 
-Initialize config:
-
 ```bash
+# Interactive setup
 snip init
-```
 
-Run a default snapshot (uses `default_profile` from `.snip.yaml`):
-
-```bash
+# Generate a snapshot using the default profile (from .snip.yaml)
 snip
-```
 
-Run an explicit profile:
-
-```bash
+# Run a specific profile with runtime modifiers
 snip run api
-snip run debug
-```
+snip run api +tests -docs
+snip run debug --stdout
 
-Toggle slices at runtime:
+# List files that would be included (dry‑run)
+snip ls api
 
-```bash
-snip run api +tests
-snip run debug -docs +configs
+# Explain why a file is included or excluded
+snip explain internal/app/snip.go
+
+# Show effective configuration and diagnostics
+snip doctor
+
+# Apply AI‑generated markdown code blocks back to the filesystem
+snip apply output.txt --file-header '===== FILE: {path} =====' --write
 ```
 
 ---
 
-## Config: minimal example
+## Configuration (`.snip.yaml`)
 
-`.snip.yaml`
+Minimal example:
 
 ```yaml
 version: 1
@@ -103,7 +96,11 @@ ignore:
     - "build/**"
     - ".venv/**"
     - ".snip/**"
-  binary_extensions: ["png", "jpg", "pdf", "zip"]
+  binary_extensions:
+    - ".png"
+    - ".jpg"
+    - ".pdf"
+    - ".zip"
 
 sensitive:
   exclude_globs:
@@ -120,20 +117,16 @@ slices:
       - "**/*.go"
     exclude:
       - "**/*_test.go"
-
   tests:
     priority: 40
     include:
       - "**/*_test.go"
       - "test/**"
-    exclude: []
-
   docs:
     priority: 20
     include:
       - "README.md"
       - "docs/**"
-    exclude: []
 
 profiles:
   api:
@@ -148,104 +141,132 @@ profiles:
 
 ---
 
-## Slices and profiles
+## Concepts
 
-- A **slice** is a named file set (`include` globs minus `exclude` globs) with a priority.
-- A **profile** enables a list of slices and can override certain budgets/render settings.
+- **Slice** – a named group of files (e.g., `api`, `tests`, `docs`). Each slice defines `include`/`exclude` globs and a `priority`.
+- **Profile** – a named snapshot recipe that enables a set of slices and may override budgets or rendering options.
+- **Modifiers** – runtime toggles (`+slice` / `-slice`) applied on top of a profile. They do not change the config file.
 
-A file can match multiple slices. snip includes it **once**, but records all memberships in the manifest.
-
-Runtime modifiers:
-
-- `+slice` enables a slice for this run
-- `-slice` disables a slice for this run
-
-Examples:
-
-```bash
-# add tests just for this run
-snip run api +tests
-
-# strip docs for debugging-focused snapshot
-snip run debug -docs
-```
+A file can belong to multiple slices. It is included **once**, assigned to the slice with the highest priority, but all slice memberships are recorded in the manifest.
 
 ---
 
-## Common workflows
+## Commands
 
-### Bundle for PR review
+### `snip init`
 
-Goal: include core code + docs, skip heavy test/infra noise.
+Creates a `.snip.yaml` configuration file.
 
-```bash
-snip run api
-```
+- Scans the repository and generates sensible slices/profiles.
+- Flags:
+  - `--force` – overwrite existing config.
+  - `--non-interactive` – use defaults without prompts.
+  - `--profile-default <name>` – set a non‑persistent default profile hint.
 
-### Bundle for debugging
+### `snip run <profile> [modifiers...]`
 
-Goal: include tests/configs and deeper tree visibility.
+Generates a snapshot bundle (default: write to a file).
 
-```bash
-snip debug +configs +tests
-```
+Flags:
+- `--config <path>` – path to config file (default `.snip.yaml`).
+- `--root <path>` – override the root directory.
+- `-o, --out <path>` – output file (use `-` for stdout).
+- `--stdout` – shortcut for `-o -`.
+- `--max-chars <n>` – override `budgets.max_chars`.
+- `--format md` – only markdown supported (default).
+- `--no-tree` – omit the repository tree.
+- `--no-manifest` – omit the manifest sections.
+- `--tree-depth <n>` – override `render.tree_depth`.
+- `--include-hidden` – include hidden files (unless excluded by sensitive/ignore rules).
+- `--quiet` – suppress printing the output path.
+
+Exit codes:
+- `0` – success.
+- `2` – usage or configuration error.
+- `3` – I/O error (e.g., cannot write output).
+- `4` – partial output (some files excluded due to budgets, unreadable content, or invalid UTF‑8; snapshot still produced).
+
+### `snip ls <profile> [modifiers...]`
+
+Dry‑run: lists included files, their slice membership, and whether they would be truncated/dropped.
+
+Flags:
+- `--max-chars <n>` – override budget for the purpose of dry‑run.
+- `--include-hidden` – include hidden files.
+- `--verbose` – show detailed drop reasons.
+
+### `snip doctor [modifiers...]`
+
+Displays effective configuration, environment diagnostics, and top exclusion reasons.
+
+Flags:
+- `--profile <name>` – profile to use (defaults to config’s `default_profile`).
+- `--include-hidden` – consider hidden files in exclusion statistics.
+
+### `snip explain <path> [modifiers...]`
+
+Explains why a specific file is included or excluded: discovery rules, slice matches, and effective selection.
+
+Flags:
+- `--profile <name>` – profile to evaluate.
+- `--include-hidden` – treat hidden files as visible for matching.
+
+### `snip apply <input-file>`
+
+Parses a markdown (or text) file for code blocks delimited by a custom header and writes the extracted files.
+
+Flags:
+- `--file-header` – **required** header template containing `{path}` (e.g., `'===== FILE: {path} ====='`).
+- `--write` – actually write files (default is dry‑run).
+- `--force` – allow overwriting existing files.
+
+The tool looks for the header line, then extracts the following code fence (any fence style) and its content. It handles nested fences correctly.
+
+### `snip version`
+
+Prints the version.
 
 ---
 
-## Partial output behavior (exit code 4)
+## Partial output (exit code 4)
 
-snip returns:
+When the snapshot is incomplete (e.g., due to budget cuts, unreadable files, or invalid UTF‑8), snip:
+- still writes the bundle.
+- prints warnings to stderr.
+- exits with code `4`.
 
-- `0` success
-- `2` usage/config error
-- `3` IO error
-- `4` **partial output** (snapshot was produced, but exclusions/truncation occurred)
-
-Partial output happens when:
-
-- unreadable files were excluded
-- invalid UTF-8 files were excluded
-- global budget forced dropping slices/files
-- bundle was hard-cut due to `max_chars`
-
-When partial output occurs:
-
-- snip still writes the snapshot (file or stdout)
-- warnings are printed to stderr (`warning: ...`)
-- process exits with code **4**
-
-This is intended for CI/automation: you can treat `4` as "artifact produced but incomplete".
+This is useful for automation where you want to accept an incomplete artifact but still be aware of omissions.
 
 ---
 
-## Diagnostics
-
-### snip doctor
-
-Prints:
-
-- effective config path
-- effective root
-- enabled slices
-- effective budgets
-- git availability
-- top exclusion reasons
+## Diagnostics examples
 
 ```bash
-snip doctor
+# See what would be included for profile 'api' with hidden files
+snip ls api --include-hidden
+
+# Understand why a file is excluded
+snip explain .github/workflows/ci.yml --profile full
+
+# Check effective budgets and top exclusion reasons
 snip doctor --profile debug +tests
 ```
 
-### snip explain <path>
+---
 
-Explains:
+## Output pattern tokens
 
-- discovery exclusion (ignore/sensitive/gitignore/binary/unreadable)
-- slice include/exclude matches and which glob matched
-- effective selection under the chosen profile/modifiers
+`output.pattern` supports:
+- `{ts}` – timestamp `YYYYMMDD-HHMMSS`
+- `{profile}` – profile name
+- `{repo}` – base name of the root directory
+- `{gitsha}` – short git SHA (or `000000` if not available)
+- `{counter}` – monotonically increasing integer (stored in the output directory)
 
-```bash
-snip explain internal/app/snip.go
-snip explain .github/workflows/ci.yml
-snip explain internal/app/snip.go +tests
-```
+Repeated separators (`__`, `--`, `..`) are collapsed automatically.
+
+---
+
+## Contributing
+
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for design details, internal structure, and testing strategy.
