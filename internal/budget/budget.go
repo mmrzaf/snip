@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/mmrzaf/snip/internal/selector"
@@ -62,6 +63,42 @@ type Plan struct {
 	DroppedSlices []string
 	Partial       bool
 	HardCut       bool
+}
+
+// Summary returns a human-readable summary of the plan.
+func (p Plan) Summary() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "included: %d files", len(p.Included))
+	if len(p.DroppedSlices) > 0 {
+		fmt.Fprintf(&b, ", dropped slices: %d", len(p.DroppedSlices))
+	}
+	var budgetDrops, unreadable, invalidUTF8 int
+	for _, d := range p.Dropped {
+		switch d.Reason {
+		case "budget_exceeded":
+			budgetDrops++
+		case "unreadable":
+			unreadable++
+		case "invalid_utf8":
+			invalidUTF8++
+		}
+	}
+	if budgetDrops > 0 {
+		fmt.Fprintf(&b, ", budget‑exceeded files: %d", budgetDrops)
+	}
+	if unreadable > 0 {
+		fmt.Fprintf(&b, ", unreadable files: %d", unreadable)
+	}
+	if invalidUTF8 > 0 {
+		fmt.Fprintf(&b, ", invalid UTF‑8 files: %d", invalidUTF8)
+	}
+	if p.HardCut {
+		b.WriteString(", hard‑cut at limit")
+	}
+	if p.Partial {
+		b.WriteString(" [PARTIAL]")
+	}
+	return b.String()
 }
 
 // BuildPlan reads included files, applies per-file truncation, and records dropped.

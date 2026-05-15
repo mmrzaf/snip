@@ -175,7 +175,7 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 		return RunResult{}, Wrap(ExitIO, err)
 	}
 
-	warnPartial(os.Stderr, planFinal)
+	printBudgetWarnings(os.Stderr, planFinal)
 
 	stdout := opts.Output == "-" || (opts.Output == "" && cfg.Output.StdoutDefault)
 	if stdout {
@@ -212,22 +212,36 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 	return res, nil
 }
 
-func warnPartial(w *os.File, plan budget.Plan) {
-	warn := func(msg string) {
-		_, _ = fmt.Fprintln(w, "warning:", msg)
+func printBudgetWarnings(w *os.File, plan budget.Plan) {
+	if !plan.Partial {
+		return
 	}
-	for _, s := range plan.DroppedSlices {
-		warn(fmt.Sprintf("slice dropped due to budget: %s", s))
+	_, _ = fmt.Fprintln(w, "warning: snapshot is partial (some content excluded due to budget or errors)")
+	if len(plan.DroppedSlices) > 0 {
+		_, _ = fmt.Fprintf(w, "warning: dropped slices (budget): %s\n", strings.Join(plan.DroppedSlices, ", "))
 	}
+	var unreadable, invalidUTF8, budgetExceeded int
 	for _, d := range plan.Dropped {
 		switch d.Reason {
 		case "unreadable":
-			warn(fmt.Sprintf("unreadable file excluded: %s", d.RelPath))
+			unreadable++
 		case "invalid_utf8":
-			warn(fmt.Sprintf("invalid UTF-8 file excluded: %s", d.RelPath))
+			invalidUTF8++
 		case "budget_exceeded":
-			// Files are already implied by slice warnings; keep noise low.
+			budgetExceeded++
 		}
+	}
+	if unreadable > 0 {
+		_, _ = fmt.Fprintf(w, "warning: %d unreadable file(s) excluded\n", unreadable)
+	}
+	if invalidUTF8 > 0 {
+		_, _ = fmt.Fprintf(w, "warning: %d invalid UTF-8 file(s) excluded\n", invalidUTF8)
+	}
+	if budgetExceeded > 0 {
+		_, _ = fmt.Fprintf(w, "warning: %d file(s) dropped due to budget (use --verbose for details)\n", budgetExceeded)
+	}
+	if plan.HardCut {
+		_, _ = fmt.Fprintln(w, "warning: bundle hard‑cut at max_chars limit")
 	}
 }
 
@@ -368,32 +382,47 @@ func List(ctx context.Context, opts ListOptions) (string, bool, error) {
 	}
 
 	if len(planFinal.DroppedSlices) > 0 {
-		for _, s := range planFinal.DroppedSlices {
-			fmt.Fprintf(&sb, "Dropped slice due to budget: %s\n", s)
-		}
+		fmt.Fprintf(&sb, "\nDropped slices (budget): %s\n", strings.Join(planFinal.DroppedSlices, ", "))
 	}
 
 	if opts.Verbose {
-		sb.WriteString("Dropped:\n")
-		for _, d := range planFinal.Dropped {
-			fmt.Fprintf(&sb, "  - %s reason=%s", d.RelPath, d.Reason)
-			if d.Detail != "" {
-				fmt.Fprintf(&sb, " detail=%s", d.Detail)
+		if len(planFinal.Dropped) > 0 {
+			sb.WriteString("\nDropped:\n")
+			for _, d := range planFinal.Dropped {
+				fmt.Fprintf(&sb, "  - %s reason=%s", d.RelPath, d.Reason)
+				if d.Detail != "" {
+					fmt.Fprintf(&sb, " detail=%s", d.Detail)
+				}
+				if d.PrimarySlice != "" {
+					fmt.Fprintf(&sb, " slice=%s", d.PrimarySlice)
+				}
+				sb.WriteString("\n")
 			}
-			if d.PrimarySlice != "" {
-				fmt.Fprintf(&sb, " slice=%s", d.PrimarySlice)
-			}
-			sb.WriteString("\n")
 		}
 	} else {
-		var droppedCount int
+		var budgetDrops, unreadable, invalidUTF8 int
 		for _, d := range planFinal.Dropped {
-			if d.Reason == "budget_exceeded" {
-				droppedCount++
+			switch d.Reason {
+			case "budget_exceeded":
+				budgetDrops++
+			case "unreadable":
+				unreadable++
+			case "invalid_utf8":
+				invalidUTF8++
 			}
 		}
-		if droppedCount > 0 {
-			fmt.Fprintf(&sb, "Dropped files due to budget: %d (use --verbose for details)\n", droppedCount)
+		if budgetDrops > 0 || unreadable > 0 || invalidUTF8 > 0 {
+			sb.WriteString("\nBudget summary:\n")
+			if budgetDrops > 0 {
+				fmt.Fprintf(&sb, "  budget‑exceeded: %d\n", budgetDrops)
+			}
+			if unreadable > 0 {
+				fmt.Fprintf(&sb, "  unreadable: %d\n", unreadable)
+			}
+			if invalidUTF8 > 0 {
+				fmt.Fprintf(&sb, "  invalid UTF‑8: %d\n", invalidUTF8)
+			}
+			sb.WriteString("  (use --verbose for full list)\n")
 		}
 	}
 
