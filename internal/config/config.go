@@ -381,24 +381,73 @@ func ApplyProfileOverrides(cfg Config, profile string) (Config, error) {
 	return out, nil
 }
 
-// Write writes the config to disk with safe permissions.
+// Write writes the config to disk with safe permissions (0644).
+// It uses an atomic write pattern (temp file + rename) to prevent corruption.
 func Write(path string, cfg Config) error {
-	b, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("marshal yaml: %w", err)
+		return fmt.Errorf("marshal config: %w", err)
 	}
+
+	if err := ensureDir(path); err != nil {
+		return err
+	}
+	final := appendHeaderComment(data)
+
+	return atomicWrite(path, final)
+}
+
+// ensureDir creates the parent directory of the given path if it doesn't exist.
+func ensureDir(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+		return fmt.Errorf("create directory %s: %w", dir, err)
 	}
+	return nil
+}
+
+// headerComment returns the configuration file header documentation.
+func headerComment() string {
+	return `# ─────────────────────────────────────────────────────────────
+#  snip configuration – https://github.com/mmrzaf/snip
+#
+#  - Slices: named groups of files (api, tests, docs, ...)
+#  - Profiles: combine slices + optional overrides
+#  - Modifiers: snip run api +tests -docs
+#  - Use ` + "`snip doctor`" + ` to see effective settings
+#  - Use ` + "`snip explain <file>`" + ` to debug inclusion/exclusion
+# ─────────────────────────────────────────────────────────────
+
+`
+}
+
+// appendHeaderComment prepends the header comment to the YAML data.
+func appendHeaderComment(data []byte) []byte {
+	comment := headerComment()
+	result := make([]byte, 0, len(comment)+len(data))
+	result = append(result, comment...)
+	result = append(result, data...)
+	return result
+}
+
+// atomicWrite writes data to a temporary file and renames it atomically.
+func atomicWrite(path string, data []byte) (err error) {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return fmt.Errorf("write temp: %w", err)
+
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
 	}
+
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+		return fmt.Errorf("rename temp file: %w", err)
 	}
+
 	return nil
 }
 

@@ -221,7 +221,7 @@ func TestParse_DuplicatePathError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate path error")
 	}
-	if !strings.Contains(err.Error(), "ambiguous duplicate") {
+	if !strings.Contains(err.Error(), "duplicate file path") {
 		t.Errorf("error missing duplicate wording: %v", err)
 	}
 }
@@ -443,7 +443,7 @@ func TestApply_DuplicateTargetAfterResolve(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate target error")
 	}
-	if !strings.Contains(err.Error(), "ambiguous duplicate target path") {
+	if !strings.Contains(err.Error(), "duplicate target path") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
