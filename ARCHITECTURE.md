@@ -1,10 +1,3 @@
-I understand. You want the **ARCHITECTURE.md** to remain a **complete, detailed reference** for developers (pre‑dev), not a shortened summary. It should reflect the current codebase accurately and be as thorough as the original (700+ lines). I will now provide the full, updated `ARCHITECTURE.md` and `README.md` based on the source you shared.
-
----
-
-## ARCHITECTURE.md (full, detailed, reference‑style)
-
-```markdown
 # Snip Architecture
 
 ## 1. Purpose
@@ -813,5 +806,4 @@ internal/
 8. Modifiers (`+/-`) never change the config file.
 9. Every run that produces a bundle writes it atomically.
 10. Partial runs (exit 4) still produce a usable snapshot (some content omitted with warnings).
-```
 
