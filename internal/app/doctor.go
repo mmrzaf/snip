@@ -43,11 +43,6 @@ func Doctor(ctx context.Context, opts DoctorOptions) (string, error) {
 		profile = cfg.DefaultProfile
 	}
 
-	cfg, err = config.ApplyProfileOverrides(cfg, profile)
-	if err != nil {
-		return "", Wrap(ExitUsage, err)
-	}
-
 	mods, err := selector.ParseModifiers(opts.Modifiers)
 	if err != nil {
 		return "", Wrap(ExitUsage, err)
@@ -57,6 +52,10 @@ func Doctor(ctx context.Context, opts DoctorOptions) (string, error) {
 		return "", Wrap(ExitUsage, err)
 	}
 	enabledOrdered := selector.EnabledSliceList(enabled, cfg)
+	cfg, err = config.ApplyProfileOverrides(cfg, profile)
+	if err != nil {
+		return "", Wrap(ExitUsage, err)
+	}
 
 	limits := budget.Limits{
 		MaxChars:        cfg.Budgets.MaxChars,
@@ -159,11 +158,6 @@ func Explain(ctx context.Context, opts ExplainOptions) (string, error) {
 		profile = cfg.DefaultProfile
 	}
 
-	cfg, err = config.ApplyProfileOverrides(cfg, profile)
-	if err != nil {
-		return "", Wrap(ExitUsage, err)
-	}
-
 	mods, err := selector.ParseModifiers(opts.Modifiers)
 	if err != nil {
 		return "", Wrap(ExitUsage, err)
@@ -173,6 +167,10 @@ func Explain(ctx context.Context, opts ExplainOptions) (string, error) {
 		return "", Wrap(ExitUsage, err)
 	}
 	enabledOrdered := selector.EnabledSliceList(enabled, cfg)
+	cfg, err = config.ApplyProfileOverrides(cfg, profile)
+	if err != nil {
+		return "", Wrap(ExitUsage, err)
+	}
 
 	// Normalize path to relpath under root (best effort).
 	rel := opts.Path

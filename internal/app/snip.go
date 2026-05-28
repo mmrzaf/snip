@@ -62,20 +62,24 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, Wrap(ExitUsage, err)
 	}
-	cfg, err = config.ApplyProfileOverrides(cfg, opts.Profile)
-	if err != nil {
-		return RunResult{}, Wrap(ExitUsage, err)
+	profile := opts.Profile
+	if profile == "" {
+		profile = cfg.DefaultProfile
 	}
 
 	mods, err := selector.ParseModifiers(opts.Modifiers)
 	if err != nil {
 		return RunResult{}, Wrap(ExitUsage, err)
 	}
-	enabled, err := selector.EnabledSlices(cfg, opts.Profile, mods)
+	enabled, err := selector.EnabledSlices(cfg, profile, mods)
 	if err != nil {
 		return RunResult{}, Wrap(ExitUsage, err)
 	}
 	enabledOrdered := selector.EnabledSliceList(enabled, cfg)
+	cfg, err = config.ApplyProfileOverrides(cfg, profile)
+	if err != nil {
+		return RunResult{}, Wrap(ExitUsage, err)
+	}
 
 	limits := budget.Limits{
 		MaxChars:        cfg.Budgets.MaxChars,
@@ -119,7 +123,7 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 	log.Debug("selected", "included", len(selected.Included), "dropped", len(selected.Dropped))
 
 	b := &budget.Builder{Limits: limits}
-	plan, err := b.BuildPlan(ctx, opts.Profile, enabledOrdered, selected)
+	plan, err := b.BuildPlan(ctx, profile, enabledOrdered, selected)
 	if err != nil {
 		return RunResult{}, Wrap(ExitIO, err)
 	}
@@ -162,7 +166,7 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 	info := render.BundleInfo{
 		Repo:        filepath.Base(root),
 		Root:        rootLabel,
-		Profile:     opts.Profile,
+		Profile:     profile,
 		Enabled:     enabledOrdered,
 		GitSHA:      sha,
 		Timestamp:   now,
@@ -201,7 +205,7 @@ func Run(ctx context.Context, opts RunOptions) (RunResult, error) {
 		return res, nil
 	}
 
-	outPath, err := writeDefaultOutput(root, cfg, opts.Profile, sha, now, rendered)
+	outPath, err := writeDefaultOutput(root, cfg, profile, sha, now, rendered)
 	if err != nil {
 		return RunResult{}, Wrap(ExitIO, err)
 	}
@@ -276,19 +280,23 @@ func List(ctx context.Context, opts ListOptions) (string, bool, error) {
 	if err != nil {
 		return "", false, Wrap(ExitUsage, err)
 	}
-	cfg, err = config.ApplyProfileOverrides(cfg, opts.Profile)
-	if err != nil {
-		return "", false, Wrap(ExitUsage, err)
+	profile := opts.Profile
+	if profile == "" {
+		profile = cfg.DefaultProfile
 	}
 	mods, err := selector.ParseModifiers(opts.Modifiers)
 	if err != nil {
 		return "", false, Wrap(ExitUsage, err)
 	}
-	enabled, err := selector.EnabledSlices(cfg, opts.Profile, mods)
+	enabled, err := selector.EnabledSlices(cfg, profile, mods)
 	if err != nil {
 		return "", false, Wrap(ExitUsage, err)
 	}
 	enabledOrdered := selector.EnabledSliceList(enabled, cfg)
+	cfg, err = config.ApplyProfileOverrides(cfg, profile)
+	if err != nil {
+		return "", false, Wrap(ExitUsage, err)
+	}
 
 	limits := budget.Limits{
 		MaxChars:        cfg.Budgets.MaxChars,
@@ -318,7 +326,7 @@ func List(ctx context.Context, opts ListOptions) (string, bool, error) {
 		return "", false, Wrap(ExitUsage, err)
 	}
 
-	plan, err := b.BuildPlan(ctx, opts.Profile, enabledOrdered, selected)
+	plan, err := b.BuildPlan(ctx, profile, enabledOrdered, selected)
 	if err != nil {
 		return "", false, Wrap(ExitIO, err)
 	}
@@ -360,7 +368,7 @@ func List(ctx context.Context, opts ListOptions) (string, bool, error) {
 	info := render.BundleInfo{
 		Repo:        filepath.Base(root),
 		Root:        rootLabel,
-		Profile:     opts.Profile,
+		Profile:     profile,
 		Enabled:     enabledOrdered,
 		GitSHA:      sha,
 		Timestamp:   now,

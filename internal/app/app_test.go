@@ -186,6 +186,104 @@ func TestRunWritesBundleForSimpleRepo(t *testing.T) {
 	}
 }
 
+func TestRunEmptyProfileUsesConfigDefaultProfile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Root = root
+	cfg.DefaultProfile = "api"
+	cfg.Ignore.UseGitignore = false
+	cfg.Slices = map[string]config.SliceConfig{
+		"code": {Include: []string{"**/*.go"}, Priority: 10},
+		"docs": {Include: []string{"README.md"}, Priority: 5},
+	}
+	cfg.Profiles = map[string]config.Profile{
+		"api":   {Enable: []string{"code"}},
+		"debug": {Enable: []string{"docs"}},
+	}
+
+	cfgPath := filepath.Join(root, ".snip.yaml")
+	if err := config.Write(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("docs\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	outPath := filepath.Join(root, "bundle.md")
+	_, err := Run(context.Background(), RunOptions{
+		ConfigPath: cfgPath,
+		Output:     outPath,
+		Now: func() time.Time {
+			return time.Date(2026, 2, 19, 10, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	out := string(b)
+	if !strings.Contains(out, "profile: api") {
+		t.Fatalf("bundle missing default profile:\n%s", out)
+	}
+	if !strings.Contains(out, "<<<FILE:main.go>>>") {
+		t.Fatalf("bundle missing code file from default profile:\n%s", out)
+	}
+	if strings.Contains(out, "<<<FILE:README.md>>>") {
+		t.Fatalf("bundle included non-default profile file:\n%s", out)
+	}
+}
+
+func TestListEmptyProfileUsesConfigDefaultProfile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Root = root
+	cfg.DefaultProfile = "api"
+	cfg.Ignore.UseGitignore = false
+	cfg.Slices = map[string]config.SliceConfig{
+		"code": {Include: []string{"**/*.go"}, Priority: 10},
+		"docs": {Include: []string{"README.md"}, Priority: 5},
+	}
+	cfg.Profiles = map[string]config.Profile{
+		"api":   {Enable: []string{"code"}},
+		"debug": {Enable: []string{"docs"}},
+	}
+
+	cfgPath := filepath.Join(root, ".snip.yaml")
+	if err := config.Write(cfgPath, cfg); err != nil {
+		t.Fatalf("config.Write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("docs\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	out, _, err := List(context.Background(), ListOptions{ConfigPath: cfgPath})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !strings.Contains(out, "Enabled slices: [code]") {
+		t.Fatalf("list missing default profile slice:\n%s", out)
+	}
+	if !strings.Contains(out, "main.go") {
+		t.Fatalf("list missing code file:\n%s", out)
+	}
+	if strings.Contains(out, "README.md") {
+		t.Fatalf("list included non-default profile file:\n%s", out)
+	}
+}
+
 func TestRunTreeUsesDiscoveryNotSlicePatterns(t *testing.T) {
 	t.Parallel()
 

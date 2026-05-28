@@ -156,32 +156,57 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	base := filepath.Base(path)
-	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp.%d", base, os.Getpid()))
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	f, err := os.CreateTemp(dir, "."+base+".tmp.*")
 	if err != nil {
 		return fmt.Errorf("open temp: %w", err)
 	}
-	_, werr := f.Write(data)
-	cerr := f.Close()
-	if werr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write temp: %w", werr)
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("chmod temp: %w", err)
 	}
-	if cerr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close temp: %w", cerr)
+	n, err := f.Write(data)
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if n != len(data) {
+		_ = f.Close()
+		return fmt.Errorf("write temp: %w", io.ErrShortWrite)
 	}
 	if runtime.GOOS != "windows" {
-		// Best-effort fsync on POSIX.
-		df, err := os.Open(dir)
-		if err == nil {
-			_ = df.Sync()
-			_ = df.Close()
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("sync temp: %w", err)
 		}
 	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("rename: %w", err)
+	}
+	cleanup = false
+
+	if runtime.GOOS != "windows" {
+		df, err := os.Open(dir)
+		if err != nil {
+			return fmt.Errorf("open dir: %w", err)
+		}
+		if err := df.Sync(); err != nil {
+			_ = df.Close()
+			return fmt.Errorf("sync dir: %w", err)
+		}
+		if err := df.Close(); err != nil {
+			return fmt.Errorf("close dir: %w", err)
+		}
 	}
 	return nil
 }
