@@ -25,6 +25,7 @@ snip doctor +tests
 snip doctor --profile debug -docs
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			args = unescapeModifiers(args)
 			out, err := app.Doctor(context.Background(), app.DoctorOptions{
 				ConfigPath:    *cfgPath,
 				RootOverride:  *rootOverride,
@@ -45,6 +46,5 @@ snip doctor --profile debug -docs
 
 	cmd.Flags().StringVar(&profile, "profile", "", "Profile (defaults to config default_profile)")
 	cmd.Flags().BoolVar(&includeHidden, "include-hidden", false, "Allow hidden files unless excluded by sensitive/ignore rules")
-	cmd.Flags().SetInterspersed(false)
 	return cmd
 }

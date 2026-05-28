@@ -3,6 +3,7 @@ package util
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +56,32 @@ func TestNextCounter(t *testing.T) {
 	}
 	if string(b) != "2\n" {
 		t.Fatalf("file=%q", string(b))
+	}
+}
+
+func TestAtomicWriteFileCreatesParentAndCleansTemp(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "out.txt")
+	if err := AtomicWriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("AtomicWriteFile: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(b) != "hello\n" {
+		t.Fatalf("content=%q", string(b))
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".out.txt.tmp.") {
+			t.Fatalf("stale temp file left behind: %s", entry.Name())
+		}
 	}
 }

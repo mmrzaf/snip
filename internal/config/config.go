@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mmrzaf/snip/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -94,18 +95,30 @@ type SliceConfig struct {
 // Profile defines a profile.
 type Profile struct {
 	Enable  []string       `yaml:"enable"`
-	Budgets BudgetOverride `yaml:"budgets"`
-	Render  RenderOverride `yaml:"render"`
+	Budgets BudgetOverride `yaml:"budgets,omitempty"`
+	Render  RenderOverride `yaml:"render,omitempty"`
 }
 
 // BudgetOverride allows per-profile overrides.
 type BudgetOverride struct {
-	MaxChars int `yaml:"max_chars"`
+	MaxChars int `yaml:"max_chars,omitempty"`
 }
 
 // RenderOverride allows per-profile overrides.
 type RenderOverride struct {
-	TreeDepth int `yaml:"tree_depth"`
+	TreeDepth int `yaml:"tree_depth,omitempty"`
+}
+
+// IsZero lets YAML omit empty per-profile budget overrides while still loading
+// old configs that spelled them as max_chars: 0.
+func (b BudgetOverride) IsZero() bool {
+	return b.MaxChars == 0
+}
+
+// IsZero lets YAML omit empty per-profile render overrides while still loading
+// old configs that spelled them as tree_depth: 0.
+func (r RenderOverride) IsZero() bool {
+	return r.TreeDepth == 0
 }
 
 // Default returns a conservative default config.
@@ -140,7 +153,7 @@ func Default() Config {
 			},
 		},
 		Budgets: BudgetConfig{
-			MaxChars:        120000,
+			MaxChars:        200000,
 			PerFileMaxLines: 600,
 			PerFileMaxBytes: 262144,
 			DropPolicy:      "drop_low_priority",
@@ -389,21 +402,8 @@ func Write(path string, cfg Config) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := ensureDir(path); err != nil {
-		return err
-	}
 	final := appendHeaderComment(data)
-
-	return atomicWrite(path, final)
-}
-
-// ensureDir creates the parent directory of the given path if it doesn't exist.
-func ensureDir(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create directory %s: %w", dir, err)
-	}
-	return nil
+	return util.AtomicWriteFile(path, final, 0o644)
 }
 
 // headerComment returns the configuration file header documentation.
@@ -428,27 +428,6 @@ func appendHeaderComment(data []byte) []byte {
 	result = append(result, comment...)
 	result = append(result, data...)
 	return result
-}
-
-// atomicWrite writes data to a temporary file and renames it atomically.
-func atomicWrite(path string, data []byte) (err error) {
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp)
-		}
-	}()
-
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-
-	return nil
 }
 
 // EnsureNoSymlinkRoot rejects symlink roots for safety.

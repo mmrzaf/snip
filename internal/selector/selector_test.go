@@ -1,6 +1,7 @@
 package selector
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mmrzaf/snip/internal/config"
@@ -79,6 +80,74 @@ func TestEnabledSlices(t *testing.T) {
 			t.Fatalf("en[%d]=%s want=%s", i, en[i], want[i])
 		}
 	}
+}
+
+func TestEnabledSlicesUnknownProfileListsAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := selectorErrorFixture()
+	_, err := EnabledSlices(cfg, "foo", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{`unknown profile "foo"`, "available: api, debug, full, minimal"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+func TestEnabledSlicesUnknownModifierSliceListsAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := selectorErrorFixture()
+	_, err := EnabledSlices(cfg, "api", []Modifier{{Name: "bar", Enable: true}})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{`unknown slice "bar"`, "available: code, configs, docs, infra, tests"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+func TestEnabledSlicesProfileUnknownSliceStaysClear(t *testing.T) {
+	t.Parallel()
+
+	cfg := selectorErrorFixture()
+	cfg.Profiles["api"] = config.Profile{Enable: []string{"missing"}}
+	_, err := EnabledSlices(cfg, "api", nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{`profile "api" enables unknown slice "missing"`, "available: code, configs, docs, infra, tests"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+func selectorErrorFixture() config.Config {
+	cfg := config.Default()
+	cfg.DefaultProfile = "api"
+	cfg.Slices = map[string]config.SliceConfig{
+		"code":    {Include: []string{"**/*.go"}, Priority: 100},
+		"configs": {Include: []string{"**/*.yaml"}, Priority: 15},
+		"docs":    {Include: []string{"README.md"}, Priority: 20},
+		"infra":   {Include: []string{".github/**"}, Priority: 10},
+		"tests":   {Include: []string{"**/*_test.go"}, Priority: 40},
+	}
+	cfg.Profiles = map[string]config.Profile{
+		"api":     {Enable: []string{"code", "docs"}},
+		"debug":   {Enable: []string{"code", "docs", "tests"}},
+		"full":    {Enable: []string{"code", "configs", "docs", "infra", "tests"}},
+		"minimal": {Enable: []string{"code"}},
+	}
+	return cfg
 }
 
 func TestSelectPrimaryAndHiddenRules(t *testing.T) {

@@ -44,18 +44,18 @@ func ParseModifiers(args []string) ([]Modifier, error) {
 func EnabledSlices(cfg config.Config, profile string, mods []Modifier) ([]string, error) {
 	p, ok := cfg.Profiles[profile]
 	if !ok {
-		return nil, fmt.Errorf("unknown profile %q", profile)
+		return nil, fmt.Errorf("unknown profile %q (available: %s)", profile, strings.Join(sortedProfileKeys(cfg.Profiles), ", "))
 	}
 	enabled := map[string]bool{}
 	for _, s := range p.Enable {
 		if _, ok := cfg.Slices[s]; !ok {
-			return nil, fmt.Errorf("profile %q enables unknown slice %q", profile, s)
+			return nil, fmt.Errorf("profile %q enables unknown slice %q (available: %s)", profile, s, strings.Join(sortedSliceKeys(cfg.Slices), ", "))
 		}
 		enabled[s] = true
 	}
 	for _, m := range mods {
 		if _, ok := cfg.Slices[m.Name]; !ok {
-			return nil, fmt.Errorf("unknown slice %q", m.Name)
+			return nil, fmt.Errorf("unknown slice %q (available: %s)", m.Name, strings.Join(sortedSliceKeys(cfg.Slices), ", "))
 		}
 		enabled[m.Name] = m.Enable
 	}
@@ -67,6 +67,24 @@ func EnabledSlices(cfg config.Config, profile string, mods []Modifier) ([]string
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func sortedProfileKeys(m map[string]config.Profile) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedSliceKeys(m map[string]config.SliceConfig) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // File describes a file considered by selection.

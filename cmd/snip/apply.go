@@ -19,20 +19,23 @@ func newApplyCmd(rootOverride *string) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "apply <input-file>",
-		Short: "Apply AI-generated markdown code blocks to the filesystem",
+		Short: "Apply markdown file blocks to the filesystem",
 		Long: strings.TrimSpace(`
-Apply AI-generated markdown code blocks to the filesystem.
-Does not require snip format.
+Apply markdown file blocks to the filesystem.
+
+Default mode is a safe dry-run. Use --write to write files.
+When --file-header is omitted, snip auto-detects common Snip headers:
+  <<<FILE:{path}>>>
+  ===== FILE: {path} =====
 `),
 		Args: cobra.ExactArgs(1),
 		Example: strings.TrimSpace(`
+snip apply bundle.md
+snip apply bundle.md --write
+snip apply bundle.md --write --force
 snip apply ai.txt --file-header '===== FILE: {path} ====='
-snip apply ai.txt --file-header '<<<FILE:{path}>>>' --write --force
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(fileHeader) == "" {
-				return app.Wrap(app.ExitUsage, fmt.Errorf("--file-header is required (must contain {path})"))
-			}
 			res, err := applytool.Run(args[0], applytool.Options{
 				Root:       *rootOverride,
 				FileHeader: fileHeader,
@@ -50,7 +53,6 @@ snip apply ai.txt --file-header '<<<FILE:{path}>>>' --write --force
 			}
 
 			if !write {
-				// Dry-run: show detailed plan
 				if _, err := fmt.Fprintf(os.Stdout, "%s\n", res.PlanSummary()); err != nil {
 					return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
 				}
@@ -60,7 +62,6 @@ snip apply ai.txt --file-header '<<<FILE:{path}>>>' --write --force
 				return nil
 			}
 
-			// Write mode: show summary
 			if _, err := fmt.Fprint(os.Stdout, res.WriteSummary()); err != nil {
 				return app.Wrap(app.ExitIO, fmt.Errorf("write stdout: %w", err))
 			}
@@ -68,8 +69,8 @@ snip apply ai.txt --file-header '<<<FILE:{path}>>>' --write --force
 		},
 	}
 
-	cmd.Flags().StringVar(&fileHeader, "file-header", "", "Header line template containing {path} (e.g. '===== FILE: {path} =====')")
+	cmd.Flags().StringVar(&fileHeader, "file-header", "", "Optional header line template containing {path}")
 	cmd.Flags().BoolVar(&write, "write", false, "Write files to disk (default is dry-run)")
-	cmd.Flags().BoolVar(&force, "force", false, "Allow overwriting existing files")
+	cmd.Flags().BoolVar(&force, "force", false, "Allow overwriting existing files in write mode")
 	return cmd
 }

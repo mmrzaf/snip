@@ -1,6 +1,7 @@
 package initwizard
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,30 +9,21 @@ import (
 	"github.com/mmrzaf/snip/internal/config"
 )
 
-// ProjectSignals describes high-level project characteristics.
-// Used only by templates.go for future extensions.
-type ProjectSignals struct {
-	Go       bool
-	Node     bool
-	Python   bool
-	Docker   bool
-	Github   bool
-	Monorepo bool
-}
-
-// BuildPlan is a structured representation of slices and profiles.
-// Used only by templates.go for future extensions.
-type BuildPlan struct {
-	DefaultProfile string
-	Slices         map[string][]string
-	Profiles       map[string][]string
-}
+var (
+	// ErrConfigExists is returned when a config file already exists and force is not enabled.
+	ErrConfigExists = errors.New("config already exists")
+	// ErrInvalidProfileDefault is returned when the requested default profile is not available.
+	ErrInvalidProfileDefault = errors.New("invalid profile-default")
+	// ErrInvalidInteractiveInput is returned when interactive input cannot be parsed.
+	ErrInvalidInteractiveInput = errors.New("invalid interactive input")
+)
 
 // Options control init behavior.
 type Options struct {
 	Root           string
 	Force          bool
-	NonInteractive bool
+	Interactive    bool
+	NonInteractive bool // Kept for compatibility. Init is non-interactive by default.
 	ProfileDefault string
 	ProjectType    string // optional hint: "go", "python", "node", etc.
 }
@@ -47,22 +39,28 @@ func Run(opts Options) (string, error) {
 		return "", fmt.Errorf("abs root: %w", err)
 	}
 
+	if st, err := os.Stat(absRoot); err != nil {
+		return "", fmt.Errorf("stat root: %w", err)
+	} else if !st.IsDir() {
+		return "", fmt.Errorf("root is not a directory: %s", absRoot)
+	}
+
 	outPath := filepath.Join(absRoot, ".snip.yaml")
 	if !opts.Force {
 		if _, err := os.Stat(outPath); err == nil {
-			return "", fmt.Errorf("config already exists: %s (use --force)", outPath)
+			return "", fmt.Errorf("%w: %s (use --force)", ErrConfigExists, outPath)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat config: %w", err)
 		}
 	}
-
-	project := detectProject(absRoot, opts.ProjectType)
 
 	paths, err := collectRepoFiles(absRoot)
 	if err != nil {
 		return "", err
 	}
 
+	project := detectProject(paths, opts.ProjectType)
 	slices := buildSlices(project, paths)
-
 	profiles := buildProfiles(project, slices)
 
 	cfg := config.Default()
@@ -70,16 +68,16 @@ func Run(opts Options) (string, error) {
 	cfg.Root = "."
 	cfg.Slices = slices
 	cfg.Profiles = profiles
-	cfg.DefaultProfile = "default"
+	cfg.DefaultProfile = "api"
 
 	if opts.ProfileDefault != "" {
 		if _, ok := cfg.Profiles[opts.ProfileDefault]; !ok {
-			return "", fmt.Errorf("unknown profile-default %q", opts.ProfileDefault)
+			return "", fmt.Errorf("%w %q", ErrInvalidProfileDefault, opts.ProfileDefault)
 		}
 		cfg.DefaultProfile = opts.ProfileDefault
 	}
 
-	if !opts.NonInteractive {
+	if opts.Interactive {
 		if err := interactiveReview(&cfg, slices, profiles); err != nil {
 			return "", err
 		}

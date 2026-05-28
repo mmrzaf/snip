@@ -20,73 +20,165 @@ func loggerFn(verbose bool) *slog.Logger {
 }
 
 func isModifier(s string) bool {
-	return strings.HasPrefix(s, "+") || strings.HasPrefix(s, "-")
+	return strings.HasPrefix(s, "+") || reDashModifier.MatchString(s)
 }
 
+// preprocessCLIArgs escapes dash-prefixed slice modifiers before cobra parses flags.
+// Snip treats "-docs" as a domain modifier, not a CLI flag, once positional args begin.
 func preprocessCLIArgs(args []string) []string {
-	if len(args) < 3 || args[0] != "run" {
+	if len(args) == 0 {
 		return args
 	}
-	out := make([]string, 0, len(args))
-	out = append(out, args[0])
-	out = append(out, escapeRunDashModifiers(args[1:])...)
-	return out
+
+	cmdIdx := firstCommandIndex(args)
+	if cmdIdx < 0 {
+		return escapeDefaultCommandDashModifiers(args)
+	}
+
+	switch args[cmdIdx] {
+	case "run", "ls":
+		return escapeAfterNPositionals(args, cmdIdx+1, 1)
+	case "doctor":
+		return escapeAfterNPositionals(args, cmdIdx+1, 0)
+	case "explain":
+		return escapeAfterNPositionals(args, cmdIdx+1, 1)
+	default:
+		return args
+	}
 }
 
-func escapeRunDashModifiers(args []string) []string {
-	out := make([]string, 0, len(args))
-	sawProfile := false
+func firstCommandIndex(args []string) int {
 	expectValue := false
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			out = append(out, args[i:]...)
-			break
+	for i, a := range args {
+		if expectValue {
+			expectValue = false
+			continue
 		}
+		if a == "--" {
+			return -1
+		}
+		if needsValue, ok := isGlobalFlag(a); ok {
+			expectValue = needsValue
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		switch a {
+		case "init", "run", "ls", "doctor", "explain", "apply", "version":
+			return i
+		default:
+			return -1
+		}
+	}
+	return -1
+}
+
+func escapeDefaultCommandDashModifiers(args []string) []string {
+	out := make([]string, 0, len(args))
+	expectValue := false
+	sawProfile := false
+
+	for _, a := range args {
 		if expectValue {
 			out = append(out, a)
 			expectValue = false
 			continue
 		}
-		if needsValue, ok := isRunFlag(a); ok {
-			out = append(out, a)
-			if needsValue {
-				expectValue = true
-			}
-			continue
-		}
-		if !sawProfile {
-			if strings.HasPrefix(a, "-") {
-				out = append(out, a)
-				continue
-			}
-			sawProfile = true
+		if a == "--" {
 			out = append(out, a)
 			continue
 		}
-		if reDashModifier.MatchString(a) {
+		if needsValue, ok := isGlobalFlag(a); ok {
+			out = append(out, a)
+			expectValue = needsValue
+			continue
+		}
+
+		if isDashModifierToken(a) {
 			out = append(out, escapedModifierPrefix+a)
 			continue
+		}
+
+		if !sawProfile && !strings.HasPrefix(a, "-") {
+			sawProfile = true
 		}
 		out = append(out, a)
 	}
 	return out
 }
 
-func isRunFlag(arg string) (needsValue bool, ok bool) {
+func escapeAfterNPositionals(args []string, start int, n int) []string {
+	out := make([]string, 0, len(args))
+	out = append(out, args[:start]...)
+
+	expectValue := false
+	positionals := 0
+	for i := start; i < len(args); i++ {
+		a := args[i]
+
+		if expectValue {
+			out = append(out, a)
+			expectValue = false
+			continue
+		}
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+
+		if needsValue, ok := isKnownFlag(a); ok {
+			out = append(out, a)
+			expectValue = needsValue
+			continue
+		}
+
+		if positionals >= n && isDashModifierToken(a) {
+			out = append(out, escapedModifierPrefix+a)
+			continue
+		}
+
+		if !strings.HasPrefix(a, "-") {
+			positionals++
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func isDashModifierToken(arg string) bool {
+	return reDashModifier.MatchString(arg)
+}
+
+func isGlobalFlag(arg string) (needsValue bool, ok bool) {
 	switch arg {
-	case "-o", "--out", "--max-chars", "--format", "--tree-depth", "--config", "--root":
+	case "--config", "--root":
 		return true, true
-	case "--stdout", "--no-tree", "--no-manifest", "--include-hidden", "--quiet", "--verbose":
+	case "--verbose":
 		return false, true
 	}
-	if strings.HasPrefix(arg, "--out=") ||
-		strings.HasPrefix(arg, "--max-chars=") ||
-		strings.HasPrefix(arg, "--format=") ||
-		strings.HasPrefix(arg, "--tree-depth=") ||
-		strings.HasPrefix(arg, "--config=") ||
-		strings.HasPrefix(arg, "--root=") {
+	if strings.HasPrefix(arg, "--config=") || strings.HasPrefix(arg, "--root=") {
 		return false, true
+	}
+	return false, false
+}
+
+func isKnownFlag(arg string) (needsValue bool, ok bool) {
+	if needsValue, ok := isGlobalFlag(arg); ok {
+		return needsValue, ok
+	}
+	switch arg {
+	case "-o", "--out", "--max-chars", "--format", "--tree-depth", "--profile", "--file-header":
+		return true, true
+	case "--stdout", "--no-tree", "--no-manifest", "--include-hidden", "--quiet", "--force", "--write", "--interactive", "--non-interactive":
+		return false, true
+	}
+	for _, prefix := range []string{
+		"--out=", "--max-chars=", "--format=", "--tree-depth=", "--profile=", "--file-header=",
+	} {
+		if strings.HasPrefix(arg, prefix) {
+			return false, true
+		}
 	}
 	if strings.HasPrefix(arg, "-o") && len(arg) > 2 {
 		return false, true

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/mmrzaf/snip/internal/app"
@@ -10,7 +12,7 @@ func main() {
 	os.Exit(run())
 }
 
-// run executes the root command and returns the exit code.
+// run executes the root command and returns the process exit code.
 func run() int {
 	rootCmd := newRootCommand()
 	rootCmd.SetArgs(preprocessCLIArgs(os.Args[1:]))
@@ -18,14 +20,10 @@ func run() int {
 	if err := rootCmd.Execute(); err != nil {
 		code := app.ExitIO
 		var ae *app.Error
-		if as, ok := err.(*app.Error); ok {
-			ae = as
-		}
-		if ae != nil {
+		if errors.As(err, &ae) {
 			code = ae.ExitCode()
 		}
-		// Error already printed by cobra (SilenceErrors is false here),
-		// but we need to ensure stderr gets it. Cobra prints to stderr automatically.
+		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
 		return code
 	}
 	return app.ExitOK

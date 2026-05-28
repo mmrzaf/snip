@@ -18,7 +18,7 @@ Primary UX goal: **fast, predictable snapshots with minimal typing**:
 
 ## 2. Non-Goals (v1)
 
-- No LLM calls (init is heuristic + optional questions)
+- No LLM calls (init is heuristic; optional review is explicit)
 - No “semantic understanding” of code
 - No clipboard integration
 - No background daemon or watchers
@@ -77,7 +77,7 @@ A **Profile** is a named snapshot recipe:
 - Optional budget overrides (`budgets.max_chars`)
 - Optional render overrides (`render.tree_depth`)
 
-Profiles are what users run most of the time: `api`, `tests`, `full`, `minimal`, `debug`.
+Profiles are what users run most of the time: `api`, `full`, `minimal`, `debug`.
 
 ### 4.3 Run Modifiers
 
@@ -106,14 +106,15 @@ Creates `.snip.yaml` (or merges if requested).
 
 - Scans repo structure and common signals
 - Generates initial slices + profiles + ignore rules
-- May ask optional questions if confidence is low or multiple archetypes detected
-- Supports non-interactive mode (`--non-interactive`)
+- Non-interactive by default
+- Runs interactive review only with `--interactive`
 
 Flags:
 
 - `--root <path>` (default `.`)
 - `--force` (overwrite existing config)
-- `--non-interactive`
+- `--interactive`
+- `--non-interactive` (compatibility alias; init is non-interactive by default)
 - `--profile-default <name>` (optional)
 
 ### 5.3 `snip run <profile> [modifiers...]`
@@ -185,20 +186,20 @@ Explains why a path is included/excluded:
 
 Apply AI-generated markdown code blocks to the filesystem.
 
-- Does not require snip format; uses a custom header template.
-- Parses the input file for headers matching `--file-header` (must contain `{path}`).
+- Auto-detects Snip headers when `--file-header` is omitted.
+- Supports a custom header template for nonstandard AI output.
 - Extracts the following code fence content (handles nested fences correctly).
 - Dry-run by default; `--write` actually writes files; `--force` allows overwriting.
 
 Flags:
 
-- `--file-header` (required, e.g., `'===== FILE: {path} ====='`)
+- `--file-header` (optional, e.g., `'===== FILE: {path} ====='`)
 - `--write`
 - `--force`
 
 ### 5.8 `snip version`
 
-Print version (from `internal/app/version.go`, default `1.3.0`).
+Print version (from `internal/app/version.go`, default `1.4.0`).
 
 ---
 
@@ -237,7 +238,7 @@ render:
     footer: ""
 
 budgets:
-  max_chars: 120000 # total output budget (rendered bundle chars)
+  max_chars: 200000 # total output budget (rendered bundle chars)
   per_file_max_lines: 600
   per_file_max_bytes: 262144 # 256 KiB
   drop_policy: "drop_low_priority" # v1 only
@@ -303,14 +304,14 @@ profiles:
   api:
     enable: ["api", "docs"]
     budgets:
-      max_chars: 120000
+      max_chars: 200000
     render:
       tree_depth: 4
 
   full:
     enable: ["api", "tests", "docs"]
     budgets:
-      max_chars: 220000
+      max_chars: 260000
 ```
 
 ### 6.2 Validation rules
@@ -368,18 +369,18 @@ If no slices match, a fallback `code` slice with `**/*` is created.
 
 Builds four standard profiles:
 
-- `default`: `code`, `docs`, `configs` (if exist)
+- `api`: `code`, `docs`, `configs` (if exist)
 - `full`: all slices
 - `minimal`: only `code` (or first slice)
-- `debug`: `default` + `tests`
+- `debug`: `api` + `tests`
 
 ### 7.4 Interactive Review (`prompts.go`)
 
-If not `--non-interactive`, the user sees the list of detected slices and their inclusion in the default profile. They can press Enter to accept or type modifiers (e.g., `+tests -configs`) to adjust the default profile’s enable list before writing.
+Interactive review runs only with `--interactive`. The user sees the list of detected slices and their inclusion in the default profile. They can press Enter to accept or type modifiers (e.g., `+tests -configs`) to adjust the default profile’s enable list before writing.
 
 ### 7.5 Config Write
 
-The generated config is validated and written atomically with a helpful header comment.
+The generated config is validated and written with `util.AtomicWriteFile` plus a helpful header comment.
 
 ---
 
@@ -705,22 +706,23 @@ internal/
 ```
 1. Load config (config.Load)
 2. Apply root override (config.EffectiveRoot)
-3. Apply profile overrides (config.ApplyProfileOverrides)
-4. Parse modifiers (selector.ParseModifiers)
-5. Compute enabled slices (selector.EnabledSlices)
-6. Create discovery engine (discovery.NewEngine)
-7. Discover files (eng.Discover)
-8. Select included/dropped with slice membership (selector.Select)
-9. Build plan with per‑file truncation (budget.Builder.BuildPlan)
-10. If max_chars override, apply to limits
-11. Render initial bundle (render.RenderMarkdown)
-12. Enforce global budget (budget.Builder.EnforceGlobalBudget):
+3. Resolve empty profile to `default_profile`
+4. Apply profile overrides (config.ApplyProfileOverrides)
+5. Parse modifiers (selector.ParseModifiers)
+6. Compute enabled slices (selector.EnabledSlices)
+7. Create discovery engine (discovery.NewEngine)
+8. Discover files (eng.Discover)
+9. Select included/dropped with slice membership (selector.Select)
+10. Build plan with per‑file truncation (budget.Builder.BuildPlan)
+11. If max_chars override, apply to limits
+12. Render initial bundle (render.RenderMarkdown)
+13. Enforce global budget (budget.Builder.EnforceGlobalBudget):
     - if under budget → done
     - drop low priority slices, re‑render
     - if still over, halve per_file_max_lines and rebuild
     - if still over, hard cut
-13. Write output (atomic file or stdout)
-14. Print warnings, return exit code via app.Wrap
+14. Write output (atomic file or stdout)
+15. Print warnings, return exit code via app.Wrap
 ```
 
 ---
@@ -775,10 +777,10 @@ internal/
 
 ### Profiles
 
-- `default`: `code`, `docs`, `configs` (if exist)
+- `api`: `code`, `docs`, `configs` (if exist)
 - `full`: all slices
 - `minimal`: only `code` (or first slice)
-- `debug`: `default` + `tests`
+- `debug`: `api` + `tests`
 
 ---
 
@@ -806,4 +808,3 @@ internal/
 8. Modifiers (`+/-`) never change the config file.
 9. Every run that produces a bundle writes it atomically.
 10. Partial runs (exit 4) still produce a usable snapshot (some content omitted with warnings).
-

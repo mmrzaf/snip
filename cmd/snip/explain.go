@@ -26,6 +26,7 @@ snip explain .github/workflows/ci.yml
 snip explain internal/app/snip.go +tests
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			args = unescapeModifiers(args)
 			target := args[0]
 			mods := args[1:]
 			out, err := app.Explain(context.Background(), app.ExplainOptions{
@@ -49,6 +50,5 @@ snip explain internal/app/snip.go +tests
 
 	cmd.Flags().StringVar(&profile, "profile", "", "Profile (defaults to config default_profile)")
 	cmd.Flags().BoolVar(&includeHidden, "include-hidden", false, "Allow hidden files unless excluded by sensitive/ignore rules")
-	cmd.Flags().SetInterspersed(false)
 	return cmd
 }
