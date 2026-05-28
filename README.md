@@ -22,28 +22,15 @@ Download the binary for your platform from the [Releases](https://github.com/mmr
 ## Quick start
 
 ```bash
-# Interactive setup
 snip init
-
-# Generate a snapshot using the default profile (from .snip.yaml)
 snip
-
-# Run a specific profile with runtime modifiers
 snip run api
 snip run api +tests -docs
-snip run debug --stdout
-
-# List files that would be included (dry‑run)
 snip ls api
-
-# Explain why a file is included or excluded
-snip explain internal/app/snip.go
-
-# Show effective configuration and diagnostics
 snip doctor
-
-# Apply AI‑generated markdown code blocks back to the filesystem
-snip apply output.txt --file-header '===== FILE: {path} =====' --write
+snip explain internal/app/snip.go
+snip apply .snip/last.md
+snip apply .snip/last.md --write
 ```
 
 ---
@@ -82,7 +69,7 @@ render:
     footer: ""
 
 budgets:
-  max_chars: 120000
+  max_chars: 200000
   per_file_max_lines: 600
   per_file_max_bytes: 262144
   drop_policy: drop_low_priority
@@ -134,7 +121,7 @@ profiles:
   debug:
     enable: ["api", "tests", "docs"]
     budgets:
-      max_chars: 200000
+      max_chars: 260000
     render:
       tree_depth: 6
 ```
@@ -158,9 +145,12 @@ A file can belong to multiple slices. It is included **once**, assigned to the s
 Creates a `.snip.yaml` configuration file.
 
 - Scans the repository and generates sensible slices/profiles.
+- Runs non-interactively by default.
+- Use `--interactive` to review detected slices before writing.
 - Flags:
   - `--force` – overwrite existing config.
-  - `--non-interactive` – use defaults without prompts.
+  - `--interactive` – optional review mode.
+  - `--non-interactive` – compatibility alias; init is non-interactive by default.
   - `--profile-default <name>` – set a non‑persistent default profile hint.
 
 ### `snip run <profile> [modifiers...]`
@@ -213,14 +203,14 @@ Flags:
 
 ### `snip apply <input-file>`
 
-Parses a markdown (or text) file for code blocks delimited by a custom header and writes the extracted files.
+Parses a markdown (or text) file for file blocks and prints a dry-run plan by default.
 
 Flags:
-- `--file-header` – **required** header template containing `{path}` (e.g., `'===== FILE: {path} ====='`).
+- `--file-header` – optional header template containing `{path}` for nonstandard AI output (e.g., `'===== FILE: {path} ====='`).
 - `--write` – actually write files (default is dry‑run).
 - `--force` – allow overwriting existing files.
 
-The tool looks for the header line, then extracts the following code fence (any fence style) and its content. It handles nested fences correctly.
+When `--file-header` is omitted, Snip auto-detects common Snip headers such as `<<<FILE:{path}>>>` and `===== FILE: {path} =====`. It extracts the following code fence and its content, handling nested fences correctly.
 
 ### `snip version`
 
