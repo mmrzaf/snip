@@ -2,7 +2,9 @@ package initwizard
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -14,27 +16,32 @@ import (
 func interactiveReview(cfg *config.Config, slices map[string]config.SliceConfig, profiles map[string]config.Profile) error {
 	in := bufio.NewReader(os.Stdin)
 
-	fmt.Fprintln(os.Stderr, "\nDetected slices (with file matches):")
-	printSliceSummary(os.Stderr, slices, profiles["default"].Enable)
+	fmt.Fprintln(os.Stderr, "\nDetected slices:")
+	printSliceSummary(os.Stderr, slices, profiles["api"].Enable)
 
-	fmt.Fprintf(os.Stderr, "\nDefault profile will include: %s\n", strings.Join(profiles["default"].Enable, ", "))
-	fmt.Fprintln(os.Stderr, "You can adjust using modifiers (e.g., +tests -configs). Press Enter to accept.")
+	fmt.Fprintf(os.Stderr, "\nDefault profile is %q and includes: %s\n", cfg.DefaultProfile, strings.Join(profiles["api"].Enable, ", "))
+	fmt.Fprintln(os.Stderr, "Optional modifiers for api profile (example: +tests -configs). Press Enter to accept:")
 
-	line, _ := in.ReadString('\n')
-	line = strings.TrimSpace(line)
-	if line != "" {
-		fields := strings.Fields(line)
-		mods, err := selector.ParseModifiers(fields)
-		if err != nil {
-			return fmt.Errorf("invalid modifiers: %w", err)
-		}
-		newEnable, err := applyModifiersToEnable(profiles["default"].Enable, mods, slices)
-		if err != nil {
-			return err
-		}
-		profiles["default"] = config.Profile{Enable: newEnable}
-		cfg.Profiles = profiles
+	line, err := in.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: %v", ErrInvalidInteractiveInput, err)
 	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+
+	fields := strings.Fields(line)
+	mods, err := selector.ParseModifiers(fields)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidInteractiveInput, err)
+	}
+	newEnable, err := applyModifiersToEnable(profiles["api"].Enable, mods, slices)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidInteractiveInput, err)
+	}
+	profiles["api"] = config.Profile{Enable: newEnable}
+	cfg.Profiles = profiles
 	return nil
 }
 
@@ -81,5 +88,8 @@ func applyModifiersToEnable(current []string, mods []selector.Modifier, slices m
 		}
 	}
 	sort.Strings(out)
+	if len(out) == 0 {
+		return nil, errors.New("profile must enable at least one slice")
+	}
 	return out, nil
 }
