@@ -13,13 +13,13 @@ import (
 type Kind int
 
 const (
-	// KindInvalidInput marks parsing/validation errors in user-provided content.
+	// KindInvalidInput indicates invalid apply input.
 	KindInvalidInput Kind = iota + 1
-	// KindIO marks filesystem and stream I/O errors.
+	// KindIO indicates a filesystem or stream I/O failure.
 	KindIO
 )
 
-// Error is a typed error.
+// Error is a typed apply error.
 type Error struct {
 	Kind Kind
 	Err  error
@@ -36,7 +36,7 @@ func iof(err error, format string, args ...any) error {
 	return &Error{Kind: KindIO, Err: fmt.Errorf(format+": %w", append(args, err)...)}
 }
 
-// IsKind reports whether err is an *Error of the given kind.
+// IsKind reports whether err is an apply error of the given kind.
 func IsKind(err error, kind Kind) bool {
 	var e *Error
 	if !errors.As(err, &e) {
@@ -45,15 +45,15 @@ func IsKind(err error, kind Kind) bool {
 	return e.Kind == kind
 }
 
-// Options configures parsing + apply behavior.
+// Options configures parsing and apply behavior.
 type Options struct {
 	Root       string
-	FileHeader string // Required. Must contain exactly one {path} token.
-	Write      bool   // Default false (dry-run).
-	Force      bool   // Default false (no overwrite).
+	FileHeader string // Optional. Auto-detected when empty.
+	Write      bool
+	Force      bool
 }
 
-// Result is the parsed + validated plan, with optional writes applied.
+// Result is the parsed and validated plan, with optional writes applied.
 type Result struct {
 	Files  []PlannedFile
 	Wrote  int
@@ -68,7 +68,12 @@ func Run(inputPath string, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	blocks, err := Parse(text, opts.FileHeader)
+	var blocks []Block
+	if opts.FileHeader == "" {
+		blocks, err = ParseAuto(text)
+	} else {
+		blocks, err = Parse(text, opts.FileHeader)
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -90,9 +95,8 @@ func readInput(path string) (string, error) {
 	} else {
 		b, err = os.ReadFile(path)
 		if err != nil {
-			return "", iof(err, "read input file %s", path)
+			return "", iof(err, "read input")
 		}
 	}
-	// Normalize newlines for consistent parsing.
 	return util.NormalizeNewlines(string(b)), nil
 }

@@ -16,6 +16,7 @@ type PlannedFile struct {
 	Content   []byte
 	Exists    bool
 	Overwrite bool
+	Blocked   bool // true when dry-run sees an existing file without --force
 }
 
 // Apply validates paths, plans operations, and optionally writes files.
@@ -50,7 +51,7 @@ func Apply(blocks []Block, opts Options) (Result, error) {
 		if exists && st.IsDir() {
 			return Result{}, invalidf("target %q is a directory", rel)
 		}
-		if exists && !opts.Force {
+		if opts.Write && exists && !opts.Force {
 			return Result{}, invalidf("target exists (use --force): %q", rel)
 		}
 
@@ -60,6 +61,7 @@ func Apply(blocks []Block, opts Options) (Result, error) {
 			Content:   append([]byte(nil), b.Content...),
 			Exists:    exists,
 			Overwrite: exists && opts.Force,
+			Blocked:   !opts.Write && exists && !opts.Force,
 		})
 	}
 

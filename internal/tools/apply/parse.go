@@ -65,6 +65,30 @@ func isFenceClose(line string, open fenceInfo) bool {
 	return strings.TrimSpace(rest) == ""
 }
 
+var defaultHeaderTemplates = []string{
+	"<<<FILE:{path}>>>",
+	"===== FILE: {path} =====",
+	"### `{path}`",
+}
+
+// ParseAuto extracts file blocks using common Snip/AI bundle header templates.
+func ParseAuto(input string) ([]Block, error) {
+	var lastErr error
+	for _, tpl := range defaultHeaderTemplates {
+		blocks, err := Parse(input, tpl)
+		if err == nil {
+			return blocks, nil
+		}
+		if IsKind(err, KindInvalidInput) {
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		return nil, invalidf("no file blocks detected with supported headers (try --file-header)")
+	}
+	return nil, invalidf("no file blocks detected")
+}
+
 // Parse extracts file blocks from markdown-like text using a header template.
 // Header must contain exactly one {path} token. Handles nested fences correctly.
 func Parse(input string, fileHeader string) ([]Block, error) {
@@ -73,7 +97,7 @@ func Parse(input string, fileHeader string) ([]Block, error) {
 		return nil, err
 	}
 
-	src := input
+	src := util.NormalizeNewlines(input)
 	var blocks []Block
 	seen := make(map[string]int)
 

@@ -13,16 +13,19 @@ func (r Result) PlanSummary() string {
 	} else {
 		b.WriteString("Applied: ")
 	}
-	create := 0
-	overwrite := 0
+
+	create, overwrite, blocked := 0, 0, 0
 	for _, f := range r.Files {
-		if f.Exists {
+		switch {
+		case f.Blocked:
+			blocked++
+		case f.Exists:
 			overwrite++
-		} else {
+		default:
 			create++
 		}
 	}
-	fmt.Fprintf(&b, "%d file(s) (%d create, %d overwrite)", len(r.Files), create, overwrite)
+	fmt.Fprintf(&b, "%d file(s) (%d create, %d overwrite, %d blocked)", len(r.Files), create, overwrite, blocked)
 	return b.String()
 }
 
@@ -34,12 +37,12 @@ func (r Result) VerbosePlan() string {
 	var b strings.Builder
 	for _, f := range r.Files {
 		action := "CREATE"
-		if f.Exists {
-			if f.Overwrite {
-				action = "OVERWRITE"
-			} else {
-				action = "SKIP (exists, use --force)"
-			}
+		if f.Blocked {
+			action = "BLOCKED (exists, use --force with --write)"
+		} else if f.Overwrite {
+			action = "OVERWRITE"
+		} else if f.Exists {
+			action = "WOULD OVERWRITE"
 		}
 		fmt.Fprintf(&b, "%s %s (%d bytes)\n", action, f.RelPath, len(f.Content))
 	}
@@ -56,7 +59,7 @@ func (r Result) WriteSummary() string {
 	for _, f := range r.Files {
 		if f.Overwrite {
 			fmt.Fprintf(&b, "  OVERWROTE %s\n", f.RelPath)
-		} else if !f.Exists {
+		} else {
 			fmt.Fprintf(&b, "  CREATED %s\n", f.RelPath)
 		}
 	}
