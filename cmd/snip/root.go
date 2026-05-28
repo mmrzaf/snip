@@ -22,6 +22,7 @@ func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "snip [profile] [modifiers...]",
 		Short:         "snip bundles source context into deterministic markdown snapshots",
+		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Example: strings.TrimSpace(`
@@ -50,6 +51,7 @@ snip ls api
 			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			args = unescapeModifiers(args)
 			// Default behavior: run snapshot when no subcommand is specified.
 			cfg, err := config.Load(flags.cfgPath)
 			if err != nil {

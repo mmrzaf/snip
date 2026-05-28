@@ -26,6 +26,7 @@ snip ls api +tests
 snip ls debug -docs
 `),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			args = unescapeModifiers(args)
 			profile := args[0]
 			mods := args[1:]
 			out, _, err := app.List(context.Background(), app.ListOptions{
